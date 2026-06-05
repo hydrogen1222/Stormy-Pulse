@@ -1,0 +1,126 @@
+"""Composite visualizer viewport for the OpenGL migration branch."""
+from __future__ import annotations
+
+from PySide6.QtGui import QImage, QPainter
+from PySide6.QtWidgets import QApplication, QWidget
+
+from ..config.settings import settings
+from ..visual.scene import Scene
+from .gl_scene_widget import OpenGLSceneWidget
+from .hud_overlay import HudOverlayRenderer
+
+
+class VisualizerViewport(QWidget):
+    """Stack an OpenGL scene widget under a transparent HUD overlay."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.scene = Scene()
+        self.gl_widget = OpenGLSceneWidget(self.scene, self)
+        self.overlay = HudOverlayRenderer(self.scene, self)
+        self.gl_widget.raise_()
+        self.overlay.raise_()
+
+    def resizeEvent(self, event):
+        rect = self.rect()
+        self.gl_widget.setGeometry(rect)
+        self.overlay.setGeometry(rect)
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+        super().resizeEvent(event)
+
+    def _rebuild_layout_state(self):
+        width = float(self.width())
+        height = float(self.height())
+        if width <= 0 or height <= 0:
+            return
+
+        layout = self.gl_widget.bridge._build_layout_metrics(
+            width,
+            height,
+            settings.get("hud_scale", 1.0),
+            settings.get("show_track_title", True),
+            settings.get("show_left_hud", True),
+            settings.get("show_right_hud", True),
+            settings.get("show_lyrics", False),
+        )
+        self.gl_widget.bridge._layout_state = layout
+        self.overlay._layout_state = dict(layout)
+
+    def _sync_overlay_state(self):
+        self.overlay.sync_from_renderer(self.gl_widget.bridge)
+
+    def set_target_fps(self, fps: int):
+        self.gl_widget.set_target_fps(fps)
+        self.overlay.set_target_fps(fps)
+
+    def set_track_info(self, title: str, artist: str):
+        self.gl_widget.set_track_info(title, artist)
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+
+    def set_lyrics(self, lyrics):
+        self.gl_widget.set_lyrics(lyrics)
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+
+    def set_playback_position(self, position: float):
+        self.gl_widget.set_playback_position(position)
+        self._sync_overlay_state()
+
+    def start(self):
+        self.gl_widget.start()
+        self.overlay.start()
+
+    def stop(self):
+        self.gl_widget.stop()
+        self.overlay.stop()
+
+    def reset(self):
+        self.scene.reset()
+        self.gl_widget.scene = self.scene
+        self.gl_widget.bridge.scene = self.scene
+        self.overlay.scene = self.scene
+        self.gl_widget.reset()
+        self.overlay.reset()
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+
+    def render_to_image(self, width: int, height: int, frame_dt: float = 0.016) -> QImage:
+        """Render a composited frame from the GL scene and HUD overlay."""
+        if self.width() != width or self.height() != height:
+            self.resize(width, height)
+            self.gl_widget.resize(width, height)
+            self.overlay.resize(width, height)
+
+        self.gl_widget.frame_dt = frame_dt
+        self.overlay.frame_dt = frame_dt
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+
+        if not self.isVisible():
+            self.move(-20000, -20000)
+            self.show()
+            QApplication.processEvents()
+
+        self.gl_widget.repaint()
+        QApplication.processEvents()
+
+        scene_image = self.gl_widget.grabFramebuffer()
+        self._sync_overlay_state()
+        overlay_image = self.overlay.render_overlay_to_image(width, height, frame_dt)
+
+        composite = QImage(width, height, QImage.Format.Format_RGBA8888)
+        composite.fill(0)
+        painter = QPainter(composite)
+        painter.drawImage(0, 0, scene_image)
+        painter.drawImage(0, 0, overlay_image)
+        painter.end()
+        return composite
+
+    def update(self):
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+        self.gl_widget.update()
+        self.overlay.update()
+        super().update()
