@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 from app.analysis.beat import detect_beats, compute_beat_regularity
 from app.analysis.features import FeatureFrame, GlobalFeatureSet
+from app.dynamics.calibration import TrackCalibration
 from app.visual.scene import Scene
 from app.visual.phase_engine import PhaseEngine
 
@@ -46,3 +47,18 @@ def test_silence_dormant_activity_gate():
     assert state.phase_name == "dormant"
     assert state.effective_temp < 0.05
     assert state.w_crystalline > state.w_hydrodynamic
+
+
+def test_rms_calibration_reference_consistency():
+    """Verify normalize_rms_db uses track max_rms reference consistently."""
+    rms_arr = np.linspace(0.02, 0.20, 1000)
+    flux_arr = np.ones(1000)
+    onset_arr = np.ones(1000)
+    calib = TrackCalibration.compute(rms_arr, flux_arr, onset_arr)
+
+    norm_min = calib.normalize_rms_db(0.02)
+    norm_mid = calib.normalize_rms_db(0.10)
+    norm_max = calib.normalize_rms_db(0.20)
+
+    assert norm_min < norm_mid < norm_max
+    assert norm_max >= 0.95

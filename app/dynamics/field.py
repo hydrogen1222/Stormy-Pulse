@@ -34,8 +34,10 @@ class AnalyticalPESField:
         else:
             w_k = np.ones(12, dtype=float) / 12.0
 
-        self.tonal_confidence = ctx.tonal_confidence
-        self.field_gain = (0.5 + 1.2 * ctx.energy_fast) * self.tonal_confidence
+        self.tonal_confidence = 0.0 if math.isnan(ctx.tonal_confidence) else float(ctx.tonal_confidence)
+        self.energy_fast = 0.0 if math.isnan(ctx.energy_fast) else float(ctx.energy_fast)
+        self.potential_gain = (0.5 + 1.2 * self.energy_fast) * self.tonal_confidence
+        self.curl_gain = 0.5 + 1.2 * self.energy_fast
 
         # Compute Fourier coefficients C_m = sum_k w_k * exp(-i * m * theta_k) for m=1..4
         for m in range(1, 5):
@@ -60,13 +62,12 @@ class AnalyticalPESField:
         for m in range(1, 5):
             c_re = self.fourier_c_re[m]
             c_im = self.fourier_c_im[m]
-            # Re(C_m * exp(i * m * theta)) = C_re * cos(m*theta) - C_im * sin(m*theta)
             v_angular += (c_re * math.cos(m * theta) - c_im * math.sin(m * theta))
 
         radial_envelope = math.exp(-((r_norm - 1.0) ** 2) * 2.0)
         v_radial_barrier = math.exp(-((r_norm - 0.75) ** 2) * 1.5) * 0.5
 
-        return (v_angular * radial_envelope + v_radial_barrier) * self.field_gain
+        return (v_angular * radial_envelope + v_radial_barrier) * self.potential_gain
 
     def sample_force(
         self,
@@ -105,8 +106,8 @@ class AnalyticalPESField:
         rad_bar = math.exp(-((r_norm - 0.75) ** 2) * 1.5) * 0.5
         d_rad_bar = -3.0 * (r_norm - 0.75) * rad_bar / max(1.0, base_radius)
 
-        dv_dr = (v_ang * d_rad_env + d_rad_bar) * self.field_gain
-        dv_dtheta = (dv_ang_dtheta * rad_env) * self.field_gain
+        dv_dr = (v_ang * d_rad_env + d_rad_bar) * self.potential_gain
+        dv_dtheta = (dv_ang_dtheta * rad_env) * self.potential_gain
 
         # Polar force components F_r = -∂V/∂r, F_θ = -(1/r) ∂V/∂θ
         fr = -dv_dr * 180.0
@@ -118,12 +119,17 @@ class AnalyticalPESField:
         fx_pot = fr * cos_t - ftheta * sin_t
         fy_pot = fr * sin_t + ftheta * cos_t
 
-        # Tangential rotational curl force
+        # Tangential rotational curl force (independent of tonal confidence)
         tangent_x = -sin_t
         tangent_y = cos_t
-        vortex_mag = 40.0 * self.field_gain * math.exp(-((r_norm - 1.0) ** 2) * 1.2)
+        vortex_mag = 40.0 * self.curl_gain * math.exp(-((r_norm - 1.0) ** 2) * 1.2)
         fx_curl = tangent_x * vortex_mag
         fy_curl = tangent_y * vortex_mag
+
+        # Plasma stochastic scattering force
+        plasma_mag = 50.0 * (0.4 + 1.2 * (material.excitation if material else 0.5))
+        fx_plas = cos_t * plasma_mag * (math.sin(r_norm * 8.0 + theta * 3.0))
+        fy_plas = sin_t * plasma_mag * (math.cos(r_norm * 8.0 - theta * 3.0))
 
         # Phase weights force decomposition
         if material is not None:
@@ -133,7 +139,7 @@ class AnalyticalPESField:
         else:
             w_c, w_f, w_p = 0.5, 0.4, 0.1
 
-        fx = w_c * 1.5 * fx_pot + w_f * 1.8 * fx_curl
-        fy = w_c * 1.5 * fy_pot + w_f * 1.8 * fy_curl
+        fx = w_c * 1.5 * fx_pot + w_f * 1.8 * fx_curl + w_p * 2.0 * fx_plas
+        fy = w_c * 1.5 * fy_pot + w_f * 1.8 * fy_curl + w_p * 2.0 * fy_plas
 
         return (fx, fy)

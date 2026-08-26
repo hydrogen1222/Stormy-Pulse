@@ -138,6 +138,7 @@ class ParticleSystem:
         dt: float = 0.016,
         pes_field=None,
         base_radius: float = 200.0,
+        material=None,
     ):
         """Update particles with smooth drag physics and PES field forces."""
         to_remove = []
@@ -151,19 +152,26 @@ class ParticleSystem:
 
             # Apply PES Force Field if available
             if pes_field is not None:
-                fx, fy = pes_field.sample_force(p.x, p.y, center_x, center_y, base_radius)
+                try:
+                    fx, fy = pes_field.sample_force(p.x, p.y, center_x, center_y, base_radius, material=material)
+                except TypeError:
+                    fx, fy = pes_field.sample_force(p.x, p.y, center_x, center_y, base_radius)
                 p.vx += fx * 0.08 * sf
                 p.vy += fy * 0.08 * sf
 
-            drag = 0.88 if p.is_spark else 0.94 # Faster energy dissipation
+            if material is not None:
+                drag = material.w_crystalline * 0.88 + material.w_hydrodynamic * 0.94 + material.w_plasma * 0.97
+            else:
+                drag = 0.88 if p.is_spark else 0.94
+
             p.vx *= (1.0 - (1.0 - drag) * sf)
             p.vy *= (1.0 - (1.0 - drag) * sf)
 
             p.x += p.vx * sf
             p.y += p.vy * sf
 
-            p.life -= (1.2 if p.is_spark else 0.5) * sf 
-            
+            p.life -= (1.2 if p.is_spark else 0.5) * sf
+
             if p.life <= 0:
                 to_remove.append(i)
 

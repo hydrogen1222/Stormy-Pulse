@@ -143,6 +143,29 @@ def _render_segment_worker(
         renderer = VisualizerRenderer()
         renderer.resize(width, height)
         renderer.set_target_fps(fps)
+
+        try:
+            from app.dynamics.calibration import TrackCalibration
+            from app.dynamics.context import VisualContextBuilder, DynamicsBundle
+            from app.dynamics.trajectory import MaterialTrajectoryCompiler
+
+            calib = TrackCalibration.compute(
+                rms_arr=cache.frame_seq.features[:, cache.frame_seq.F_RMS],
+                flux_arr=cache.frame_seq.features[:, cache.frame_seq.F_FLUX],
+                onset_arr=cache.frame_seq.features[:, cache.frame_seq.F_ONSET_STR],
+            )
+            ctx_builder = VisualContextBuilder(cache, calib)
+            mat_traj = MaterialTrajectoryCompiler.compile(ctx_builder, cache.duration, simulation_hz=60.0)
+            bundle = DynamicsBundle(
+                calibration=calib,
+                context_builder=ctx_builder,
+                material_trajectory=mat_traj,
+                track_seed=abs(hash(track_path)) % 100000,
+            )
+            renderer.scene.set_dynamics_bundle(bundle)
+        except Exception as err:
+            print(f"[ExportWorker] Dynamics compile fallback: {err}")
+
         renderer.scene.load_track_features(cache.global_features)
         renderer.set_track_info(title, artist)
         renderer.set_lyrics(track.load_lyrics())
@@ -161,6 +184,9 @@ def _render_segment_worker(
 
         try:
             warmup_start = max(0, start_frame - max(0, int(preroll_frames)))
+            if warmup_start < start_frame:
+                renderer.scene.seek_to(warmup_start * dt)
+
             for frame_index in range(warmup_start, end_frame):
                 if cancel_event.is_set():
                     raise VideoExportCancelled("用户取消导出")
@@ -256,6 +282,29 @@ class VideoExporter:
         renderer = VisualizerRenderer()
         renderer.resize(options.width, options.height)
         renderer.set_target_fps(options.fps)
+
+        try:
+            from app.dynamics.calibration import TrackCalibration
+            from app.dynamics.context import VisualContextBuilder, DynamicsBundle
+            from app.dynamics.trajectory import MaterialTrajectoryCompiler
+
+            calib = TrackCalibration.compute(
+                rms_arr=feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_RMS],
+                flux_arr=feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_FLUX],
+                onset_arr=feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_ONSET_STR],
+            )
+            ctx_builder = VisualContextBuilder(feature_cache, calib)
+            mat_traj = MaterialTrajectoryCompiler.compile(ctx_builder, feature_cache.duration, simulation_hz=60.0)
+            bundle = DynamicsBundle(
+                calibration=calib,
+                context_builder=ctx_builder,
+                material_trajectory=mat_traj,
+                track_seed=abs(hash(track.file_path)) % 100000,
+            )
+            renderer.scene.set_dynamics_bundle(bundle)
+        except Exception as err:
+            print(f"[ExportSeq] Dynamics compile fallback: {err}")
+
         renderer.scene.load_track_features(feature_cache.global_features)
         renderer.set_track_info(track.metadata.title, track.metadata.artist)
         renderer.set_lyrics(track.load_lyrics())

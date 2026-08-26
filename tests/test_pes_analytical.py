@@ -30,21 +30,21 @@ def test_analytical_gradient_finite_difference_consistency():
     cx, cy, base_r = 0.0, 0.0, 200.0
     x, y = 120.0, 80.0
 
-    # Analytical force
-    fx_ana, fy_ana = field.sample_force(x, y, cx, cy, base_r)
+    # Analytical potential force (pure crystalline phase, w_c=1.0, w_f=0.0)
+    crys_material = MaterialState(0.8, 0.1, 0.1, 0.0, 0.8, 1.0, 0.0, 0.0, "crystalline")
+    fx_ana, fy_ana = field.sample_force(x, y, cx, cy, base_r, material=crys_material)
 
     # Finite difference reference
-    eps = 1.0
+    eps = 0.5
     v_c = field.sample_potential(x, y, cx, cy, base_r)
     v_px = field.sample_potential(x + eps, y, cx, cy, base_r)
     v_py = field.sample_potential(x, y + eps, cx, cy, base_r)
 
-    fx_num = -(v_px - v_c) / eps * 180.0
-    fy_num = -(v_py - v_c) / eps * 180.0
+    fx_num = -(v_px - v_c) / eps * 180.0 * 1.5
+    fy_num = -(v_py - v_c) / eps * 180.0 * 1.5
 
-    # Check finite difference consistency for potential component (ignoring curl term)
-    assert not np.isnan(fx_ana) and not np.isinf(fx_ana)
-    assert not np.isnan(fy_ana) and not np.isinf(fy_ana)
+    # Check finite difference consistency for potential component
+    np.testing.assert_allclose([fx_ana, fy_ana], [fx_num, fy_num], rtol=0.15, atol=2.0)
 
 
 def test_zero_tonal_confidence_gating():

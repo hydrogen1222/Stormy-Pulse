@@ -4,6 +4,7 @@ Translates multi-level audio features into clean, normalized, semantic VisualCon
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 import numpy as np
 from typing import Optional, Dict
@@ -55,6 +56,16 @@ class VisualContext:
     section_progress: float
 
 
+@dataclass
+class DynamicsBundle:
+    """Unified container for full-track dynamics components."""
+
+    calibration: TrackCalibration
+    context_builder: VisualContextBuilder
+    material_trajectory: "MaterialStateSequence"
+    track_seed: int
+
+
 class VisualContextBuilder:
     """Builds linearly interpolated VisualContext for any given time t."""
 
@@ -63,6 +74,8 @@ class VisualContextBuilder:
         self.frame_seq = feature_cache.frame_seq
         self.events = feature_cache.events
         self.globals = feature_cache.globals
+        self.windows = getattr(feature_cache, "windows", None)
+        self.sections = getattr(feature_cache, "sections", None)
 
         if calibration is not None:
             self.calibration = calibration
@@ -75,6 +88,7 @@ class VisualContextBuilder:
     def at(self, time: float) -> VisualContext:
         """Sample or interpolate VisualContext snapshot at exact timestamp."""
         time = max(0.0, float(time))
+        duration = self.cache.duration if hasattr(self.cache, "duration") and self.cache.duration > 0 else 100.0
         frame_dict = self.frame_seq.get_frame_dict_at_time(time)
 
         if frame_dict is None:
@@ -101,6 +115,22 @@ class VisualContextBuilder:
         # Activity Gate
         activity = _clamp(energy_fast * 1.6 + onset_norm * 0.4, 0.0, 1.0)
 
+        # L3 Window Stats (Causal Trailing Windows)
+        energy_slow = energy_fast * 0.8
+        energy_trend = 0.0
+        transient_density = onset_norm * 0.8
+        if self.windows is not None and hasattr(self.windows, "stats_4s") and self.windows.stats_4s:
+            w_times = getattr(self.windows, "times_1hz", None)
+            if w_times is not None and len(w_times) > 0:
+                idx = int(np.clip(time, 0, len(w_times) - 1))
+                if "energy_mean" in self.windows.stats_4s:
+                    e_mean_4s = float(self.windows.stats_4s["energy_mean"][idx])
+                    energy_slow = self.calibration.normalize_rms_db(e_mean_4s)
+                if "energy_mean" in self.windows.stats_2s and "energy_mean" in self.windows.stats_8s:
+                    e2 = float(self.windows.stats_2s["energy_mean"][idx])
+                    e8 = float(self.windows.stats_8s["energy_mean"][idx])
+                    energy_trend = _clamp((e2 - e8) * 2.0, -1.0, 1.0)
+
         # Spectrum
         bass_d = frame_dict["bass"]
         mid_d = (frame_dict["low_mid"] + frame_dict["mid"] + frame_dict["high_mid"]) / 3.0
@@ -123,23 +153,46 @@ class VisualContextBuilder:
 
         chroma = frame_dict.get("chroma", np.zeros(12))
         chroma_sum = float(np.sum(chroma))
-        if chroma_sum > 1e-5:
+        if chroma_sum > 1e-5 and not math.isnan(chroma_sum):
             p_chroma = chroma / chroma_sum
             entropy = -float(np.sum(p_chroma * np.log(p_chroma + 1e-12)))
-            tonal_conf = _clamp((1.0 - (entropy / np.log(12.0))) * harm_ratio * activity, 0.0, 1.0)
+            if math.isnan(entropy):
+                tonal_conf = 0.0
+            else:
+                tonal_conf = _clamp((1.0 - (entropy / math.log(12.0))) * harm_ratio * activity, 0.0, 1.0)
         else:
             tonal_conf = 0.0
 
-        # Macro section progress
-        duration = self.cache.duration if hasattr(self.cache, "duration") else 100.0
+        # L4 Section Boundaries & Real Section Progress
         sec_progress = _clamp(time / max(1.0, duration), 0.0, 1.0)
+        novelty_val = 0.0
+        boundary_impulse = 0.0
+        climax_prior = self.globals.energy if self.globals else 0.5
+
+        if self.sections is not None and hasattr(self.sections, "boundaries") and len(self.sections.boundaries) > 0:
+            bounds = self.sections.boundaries
+            sec_idx = int(np.searchsorted(bounds, time, side="right")) - 1
+            sec_start = float(bounds[sec_idx]) if sec_idx >= 0 else 0.0
+            sec_end = float(bounds[sec_idx + 1]) if sec_idx + 1 < len(bounds) else duration
+            sec_progress = _clamp((time - sec_start) / max(0.1, sec_end - sec_start), 0.0, 1.0)
+
+            # Nearest boundary impulse
+            min_dist = min(abs(time - sec_start), abs(time - sec_end))
+            boundary_impulse = float(math.exp(-min_dist / 0.35))
+
+            if hasattr(self.sections, "novelty_curve") and len(self.sections.novelty_curve) > 0:
+                n_idx = int(np.clip(time * (len(self.sections.novelty_curve) / duration), 0, len(self.sections.novelty_curve) - 1))
+                novelty_val = float(self.sections.novelty_curve[n_idx])
+
+            if hasattr(self.sections, "climax_candidates") and sec_idx in self.sections.climax_candidates:
+                climax_prior = min(1.0, climax_prior + 0.3)
 
         return VisualContext(
             time=time,
             activity=activity,
             energy_fast=energy_fast,
-            energy_slow=energy_fast * 0.8,
-            energy_trend=0.0,
+            energy_slow=energy_slow,
+            energy_trend=energy_trend,
             bass_drive=bass_d,
             mid_drive=mid_d,
             high_drive=high_d,
@@ -150,13 +203,13 @@ class VisualContextBuilder:
             flux=flux_norm,
             beat_impulse=beat_impulse,
             beat_confidence=beat_conf,
-            transient_density=onset_norm * 0.8,
+            transient_density=transient_density,
             beat_density=beat_impulse * beat_conf,
             harmonic_ratio=harm_ratio,
             tonal_confidence=tonal_conf,
             chroma=chroma,
-            novelty=0.0,
-            boundary_impulse=0.0,
-            climax_prior=self.globals.energy if self.globals else 0.5,
+            novelty=novelty_val,
+            boundary_impulse=boundary_impulse,
+            climax_prior=climax_prior,
             section_progress=sec_progress,
         )

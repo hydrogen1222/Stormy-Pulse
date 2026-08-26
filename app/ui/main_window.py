@@ -515,7 +515,31 @@ class MainWindow(QWidget):
             
             # Reset sync with new cache
             self.visualization_sync.feature_cache = features
-            
+
+            # Compile V2 Dynamics Bundle
+            try:
+                from app.dynamics.calibration import TrackCalibration
+                from app.dynamics.context import VisualContextBuilder, DynamicsBundle
+                from app.dynamics.trajectory import MaterialTrajectoryCompiler
+
+                calib = TrackCalibration.compute(
+                    rms_arr=features.frame_seq.features[:, features.frame_seq.F_RMS],
+                    flux_arr=features.frame_seq.features[:, features.frame_seq.F_FLUX],
+                    onset_arr=features.frame_seq.features[:, features.frame_seq.F_ONSET_STR],
+                )
+                ctx_builder = VisualContextBuilder(features, calib)
+                mat_traj = MaterialTrajectoryCompiler.compile(ctx_builder, features.duration, simulation_hz=60.0)
+                bundle = DynamicsBundle(
+                    calibration=calib,
+                    context_builder=ctx_builder,
+                    material_trajectory=mat_traj,
+                    track_seed=abs(hash(features.metadata.file_path)) % 100000,
+                )
+                self.visualizer.scene.set_dynamics_bundle(bundle)
+                print(f"[Dynamics V2] Attached MaterialTrajectory with {len(mat_traj.states)} 60Hz states.")
+            except Exception as dyn_err:
+                print(f"[Dynamics V2 Compile Error] {dyn_err}")
+
             # This triggers theme creation
             self.visualizer.scene.load_track_features(f)
             
@@ -681,6 +705,8 @@ class MainWindow(QWidget):
         print(f"[MainWindow] Seek to {position:.2f}s")
         self.audio_player.seek(int(position * 1000))
         self.visualization_sync.seek_to(position)
+        if hasattr(self.visualizer, "scene") and hasattr(self.visualizer.scene, "seek_to"):
+            self.visualizer.scene.seek_to(position)
 
     def _on_volume_changed(self, volume: float):
         """Handle volume change."""
