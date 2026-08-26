@@ -2,7 +2,6 @@
 Particle system for visualization.
 """
 import math
-import random
 from typing import List, Tuple
 from dataclasses import dataclass
 from ..dynamics.deterministic import (

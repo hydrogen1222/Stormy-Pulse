@@ -2,7 +2,6 @@
 Ring layer for circular visualization.
 """
 import math
-import random
 from typing import List
 
 

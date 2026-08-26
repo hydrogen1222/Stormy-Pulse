@@ -3,7 +3,6 @@ Scene manager - coordinates all visual elements.
 """
 from typing import Optional, List
 import math
-import random
 import numpy as np
 
 from ..analysis.features import FeatureFrame, GlobalFeatureSet
@@ -14,6 +13,10 @@ from .ring_layer import RingLayer
 from .energy_core import EnergyCore
 from .phase_engine import PhaseEngine
 from .pes_field import PESField
+from ..dynamics.deterministic import (
+    deterministic_float,
+    deterministic_signed,
+)
 from ..dynamics.field import AnalyticalPESField
 
 DEBUG_EVENT_SYNC = False
@@ -252,8 +255,16 @@ class Scene:
         prev_t = getattr(self, "last_time_processed", max(0.0, self.time - dt))
         self.last_time_processed = self.time
 
+        track_seed = (
+            self.dynamics_bundle.track_seed
+            if self.dynamics_bundle is not None and hasattr(self.dynamics_bundle, "track_seed")
+            else 42
+        )
+        sim_tick = int(round(self.time * 60.0))
+
         beat_event_triggered = False
         onset_event_triggered = False
+        onset_strength = onset
 
         # Use crossed events if available in dynamics bundle / features
         events_obj = None
@@ -268,12 +279,20 @@ class Scene:
                 self.is_on_beat = True
             else:
                 self.is_on_beat = False
+
+            if crossed["onset"] > 0.45 and (self.time - self.last_beat_time) > 0.15:
+                onset_event_triggered = True
+                onset_strength = crossed["onset"]
         else:
             was_on_beat = self.is_on_beat
             self.is_on_beat = beat > 0.6
             self.beat_strength = beat_strength
             if self.is_on_beat and not was_on_beat:
                 beat_event_triggered = True
+
+            if onset > 0.75 and (self.time - self.last_onset_time) > 0.1 and (self.time - self.last_beat_time) > 0.2:
+                onset_event_triggered = True
+                onset_strength = onset
 
         if beat_event_triggered:
             self.last_beat_time = self.time
@@ -286,43 +305,45 @@ class Scene:
                 self.theme.hue_base if self.theme else 200,
                 max(0.7, self.beat_strength),
                 chaos,
-                energy
+                energy,
+                track_seed=track_seed,
             )
             self.ring_layer.trigger_beat_flash()
 
-        if onset > 0.75 and (self.time - self.last_onset_time) > 0.1 and (self.time - self.last_beat_time) > 0.2:
-            onset_event_triggered = True
+        if onset_event_triggered:
             self.last_onset_time = self.time
-            self.effects.trigger_transient(onset)
+            self.effects.trigger_transient(onset_strength, track_seed=track_seed, event_tick=sim_tick)
 
-            spark_count = int(30 + onset * 70)
-            for _ in range(spark_count):
-                angle = random.random() * math.pi * 2
+            spark_count = int(30 + onset_strength * 70)
+            for i in range(spark_count):
+                angle = deterministic_float(track_seed, "spark_angle", sim_tick, i) * math.pi * 2
                 radius = self.energy_core.size * 0.9
                 self.particles.emit(
                     center_x + math.cos(angle) * radius,
                     center_y + math.sin(angle) * radius,
                     1, self.theme.hue_base if self.theme else 200,
-                    chaos, energy * 2.0, type="spark"
+                    chaos, energy * 2.0, type="spark", track_seed=track_seed,
                 )
 
         hf_trigger = max(high - 0.52, 0.0) * 1.15 + max(centroid_norm - 0.42, 0.0) * 0.8
         if onset_event_triggered:
-            hf_trigger = max(hf_trigger, onset * 0.85)
+            hf_trigger = max(hf_trigger, onset_strength * 0.85)
         if hf_trigger > 0.16:
             self.effects.trigger_high_frequency(min(1.0, hf_trigger))
 
-        # Background particles emission
+        # Background particles emission (dt-aware & keyed deterministic)
         if self.particles.get_count() < self.particles.max_particles:
-            emit_chance = rms * 0.46 + high * 0.38 + self.effects.beat_flash * 0.15
-            if random.random() < emit_chance:
-                angle = random.random() * math.pi * 2
+            emit_drive = rms * 0.46 + high * 0.38 + self.effects.beat_flash * 0.15
+            p_emit = 1.0 - math.exp(-25.0 * emit_drive * max(0.001, dt))
+            u_emit = deterministic_float(track_seed, "ambient_emit", sim_tick, 0)
+            if u_emit < p_emit:
+                angle = deterministic_float(track_seed, "ambient_angle", sim_tick, 0) * math.pi * 2
                 radius = self.energy_core.size * 0.6
                 self.particles.emit(
                     center_x + math.cos(angle) * radius,
                     center_y + math.sin(angle) * radius,
-                    int(2 + emit_chance * 10), self.theme.hue_base if self.theme else 200,
-                    chaos, energy, type="normal"
+                    int(2 + emit_drive * 10), self.theme.hue_base if self.theme else 200,
+                    chaos, energy, type="normal", track_seed=track_seed,
                 )
 
         # Legacy fallback if no V2 dynamics bundle attached

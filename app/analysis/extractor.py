@@ -203,7 +203,7 @@ class FeatureExtractor:
             beat_regularity = compute_beat_regularity(beat_times)
             
             globals_set, semantics = self._compute_globals_and_semantics(
-                y, features_matrix, tempo, beat_regularity, duration, contrast
+                y, features_matrix, tempo, beat_regularity, duration, contrast, band_shares=band_shares_seq
             )
 
 
@@ -269,9 +269,9 @@ class FeatureExtractor:
             return None
 
     def _compute_globals_and_semantics(
-        self, y, fm, tempo, beat_regularity, duration, spectral_contrast_vec
+        self, y, fm, tempo, beat_regularity, duration, spectral_contrast_vec, band_shares: Optional[np.ndarray] = None
     ):
-        """Derive Level 5 variables using deterministic musical mapping."""
+        """Derive Level 5 variables using deterministic musical mapping from true raw power shares."""
         # Unpack continuous features
         rms = fm[:, FrameFeatureSequence.F_RMS]
         bass = fm[:, FrameFeatureSequence.F_BAND_BASS]
@@ -309,12 +309,23 @@ class FeatureExtractor:
         else:
             global_contrast = 0.5
         
-        # Spectral Balance
-        b_mean = np.mean(bass)
-        m_mean = np.mean(mid)
-        h_mean = np.mean(high)
-        tot = b_mean + m_mean + h_mean + 1e-8
-        b_ratio, m_ratio, h_ratio = b_mean/tot, m_mean/tot, h_mean/tot
+        # Spectral Balance (Strictly derived from raw band power shares when available)
+        if band_shares is not None and len(band_shares) > 0 and band_shares.shape[1] == 6:
+            weights = rms / (np.sum(rms) + 1e-8)
+            mean_shares = np.sum(band_shares * weights[:, np.newaxis], axis=0)
+            
+            b_ratio = float(mean_shares[0])                               # 0-250 Hz (bass)
+            m_ratio = float(np.sum(mean_shares[1:4]))                     # 250-4000 Hz (low_mid, mid, high_mid)
+            h_ratio = float(np.sum(mean_shares[4:6]))                     # 4000+ Hz (high, presence)
+            
+            tot = b_ratio + m_ratio + h_ratio + 1e-8
+            b_ratio, m_ratio, h_ratio = b_ratio / tot, m_ratio / tot, h_ratio / tot
+        else:
+            b_mean = np.mean(bass)
+            m_mean = np.mean(mid)
+            h_mean = np.mean(high)
+            tot = b_mean + m_mean + h_mean + 1e-8
+            b_ratio, m_ratio, h_ratio = b_mean/tot, m_mean/tot, h_mean/tot
 
         # Semantics (Level 5a)
         impact = np.clip(np.mean(perc_e) / (np.mean(harm_e) + 1e-8), 0, 1)
@@ -360,14 +371,14 @@ class FeatureExtractor:
         elif avg_centroid < 0.3:
             mood = "dark"
         else:
-            mood = "bright"
+            mood = "melodic"
 
-        # 3. Structure Type from Spectral Balance & Chaos
-        if b_ratio > 0.5:
+        # 3. Structure Type from True Spectral Balance & Chaos
+        if b_ratio > 0.42:
             structure_type = "reactor" # Bass heavy needs a solid core
-        elif h_ratio > 0.4:
+        elif h_ratio > 0.25 or avg_centroid > 0.5:
             structure_type = "vortex"  # High end detail suits vortex
-        elif chaos > 0.7:
+        elif chaos > 0.65:
             structure_type = "organic" # Unpredictable music suits organic
         else:
             structure_type = "pulse"   # Balanced/Electronic suits pulse

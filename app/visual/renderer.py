@@ -2,7 +2,6 @@
 Renderer - draws the visualization using QPainter.
 """
 import math
-import random
 import time
 import unicodedata
 from typing import Dict, Optional
@@ -80,8 +79,12 @@ class VisualizerRenderer(QWidget):
         self.title_alpha = 0.0
         self.lyrics_alpha = 0.0
         self._grain_points = [
-            (random.random(), random.random(), 0.4 + random.random() * 0.6)
-            for _ in range(1300)
+            (
+                deterministic_float(0, "default_grain_x", 0, i),
+                deterministic_float(0, "default_grain_y", 0, i),
+                0.4 + deterministic_float(0, "default_grain_s", 0, i) * 0.6,
+            )
+            for i in range(1300)
         ]
         self._layout_state: Dict[str, object] = {}
         self._layout_cache_key = None
@@ -830,10 +833,17 @@ class VisualizerRenderer(QWidget):
             r, g, b, _ = theme.get_color(role="accent", alpha=1.0)
             strength = max(high, effects.high_energy_flash)
             pen_w = max(base * 0.0010, 1.0 + strength * base * 0.0030)
-            for _ in range(spike_count):
-                angle = random.random() * math.pi * 2
+            render_tick = int(round(self.scene.time * 60.0))
+            track_seed = (
+                self.scene.dynamics_bundle.track_seed
+                if self.scene.dynamics_bundle is not None and hasattr(self.scene.dynamics_bundle, "track_seed")
+                else 42
+            )
+            for i in range(spike_count):
+                angle = deterministic_float(track_seed, "hf_spike_angle", render_tick, i) * math.pi * 2
                 inner_r = _clamp(self.scene.energy_core.size * 0.88, base * 0.03, base * 0.16)
-                outer_r = inner_r + strength * base * (0.20 + random.random() * 0.10)
+                var_r = deterministic_float(track_seed, "hf_spike_radius", render_tick, i)
+                outer_r = inner_r + strength * base * (0.20 + var_r * 0.10)
                 x1 = cx + math.cos(angle) * inner_r
                 y1 = cy + math.sin(angle) * inner_r * 0.82
                 x2 = cx + math.cos(angle) * outer_r

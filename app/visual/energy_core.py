@@ -2,13 +2,13 @@
 Energy core element - the heart of the visualization.
 """
 import math
-import random
+from ..dynamics.deterministic import deterministic_float
 
 
 class EnergyCore:
     """Represents the central energy hub of the visualization."""
 
-    def __init__(self):
+    def __init__(self, track_seed: int = 42):
         self.size = 20.0
         self.brightness = 0.5
         self.rotation = 0.0
@@ -24,8 +24,11 @@ class EnergyCore:
         self.energy_env = 0.0
         self.beat_env = 0.0
         
-        # Static offsets for variety
-        self.segments_offset = [random.uniform(0, math.pi * 2) for _ in range(3)]
+        # Static deterministic offsets for variety
+        self.segments_offset = [
+            deterministic_float(track_seed, "energy_core_segment", 0, i) * math.pi * 2
+            for i in range(3)
+        ]
 
     def update(self, rms: float, bass: float, energy: float, beat_strength: float, dt: float):
         """Update core state with a crisp but restrained response."""

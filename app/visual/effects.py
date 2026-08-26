@@ -1,7 +1,7 @@
 """
 Visual effects for the renderer.
 """
-import random
+from ..dynamics.deterministic import deterministic_signed
 
 
 class EffectState:
@@ -58,10 +58,12 @@ class EffectState:
 
         self.global_pulse *= 0.94 ** sf
 
-    def trigger_transient(self, strength: float):
-        """Trigger a transient effect (camera shake)."""
-        self.camera_shake_x = (random.random() - 0.5) * strength * 4.0
-        self.camera_shake_y = (random.random() - 0.5) * strength * 3.0
+    def trigger_transient(self, strength: float, track_seed: int = 42, event_tick: int = 0):
+        """Trigger a transient effect (camera shake) deterministically."""
+        sx = deterministic_signed(track_seed, "shake_x", event_tick, 0, scale=0.5)
+        sy = deterministic_signed(track_seed, "shake_y", event_tick, 0, scale=0.5)
+        self.camera_shake_x = sx * strength * 4.0
+        self.camera_shake_y = sy * strength * 3.0
 
     def add_pulse(self, strength: float):
         """Add to global pulse."""
