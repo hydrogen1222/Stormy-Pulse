@@ -94,8 +94,8 @@ def test_l3_window_query_interpolation_at_fractional_time():
 
 
 def test_v4_cache_version_rejection():
-    """Verify v4 metadata version is distinct from current CACHE_VERSION (v5)."""
-    assert CACHE_VERSION == "v5"
+    """Verify v4 metadata version is distinct from current CACHE_VERSION (v6)."""
+    assert CACHE_VERSION == "v6"
     meta_v4 = TrackAnalysisMetadata("old.mp3", "old_hash", "v4", 10.0, 44100, 1.0)
     assert meta_v4.cache_version != CACHE_VERSION
 

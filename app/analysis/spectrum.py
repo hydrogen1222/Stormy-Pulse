@@ -71,10 +71,11 @@ def compute_onset_strength(
 
 
 def compute_band_energies_6(
-    S_power: np.ndarray, n_fft: int, sr: int
-) -> Dict[str, np.ndarray]:
+    S_power: np.ndarray, n_fft: int, sr: int, return_shares: bool = False
+) -> Dict[str, np.ndarray] | Tuple[Dict[str, np.ndarray], np.ndarray]:
     """
     Compute energy in 6 different frequency bands.
+    Returns band drives, and optionally (band_drives, raw_shares_matrix).
     """
     freqs = librosa.fft_frequencies(n_fft=n_fft, sr=sr)
     valid = freqs > 0
@@ -88,15 +89,21 @@ def compute_band_energies_6(
         "presence": (8000, sr // 2)
     }
     
-    energies = {}
+    raw_energies = {}
     
     for name, (f_min, f_max) in bands.items():
         bins = (freqs >= f_min) & (freqs < f_max) & valid
         if bins.sum() > 0:
             energy = np.sum(S_power[bins], axis=0)
-            energies[name] = energy
+            raw_energies[name] = energy
         else:
-            energies[name] = np.zeros(S_power.shape[1])
+            raw_energies[name] = np.zeros(S_power.shape[1])
+
+    # Compute raw cross-band power shares sum == 1.0
+    band_names = ["bass", "low_mid", "mid", "high_mid", "high", "presence"]
+    raw_stack = np.array([raw_energies[name] for name in band_names])
+    tot_power = np.sum(raw_stack, axis=0, keepdims=True)
+    raw_shares = raw_stack / np.maximum(1e-8, tot_power)
             
     def normalize_with_dynamics(x, punch_factor=1.0, sub_moving_min=False):
         if x.max() == 0:
@@ -104,10 +111,9 @@ def compute_band_energies_6(
             
         x_norm = x.copy()
         
-        # Remove slow moving background energy (e.g. 2 seconds = approx 80 frames at 43Hz)
+        # Remove slow moving background energy
         if sub_moving_min and len(x) > 80:
             import scipy.ndimage
-            # Fast moving minimum
             mov_min = scipy.ndimage.minimum_filter1d(x_norm, size=80)
             x_norm = x_norm - mov_min
             x_norm = np.maximum(x_norm, 0)
@@ -117,13 +123,16 @@ def compute_band_energies_6(
             
         return x_norm ** punch_factor
         
-    energies["bass"] = normalize_with_dynamics(energies["bass"], 1.5, sub_moving_min=True)
-    energies["low_mid"] = normalize_with_dynamics(energies["low_mid"], 1.3, sub_moving_min=True)
-    energies["mid"] = normalize_with_dynamics(energies["mid"], 1.1)
-    energies["high_mid"] = normalize_with_dynamics(energies["high_mid"], 1.0)
-    energies["high"] = normalize_with_dynamics(energies["high"], 1.0)
-    energies["presence"] = normalize_with_dynamics(energies["presence"], 1.0)
-    
+    energies = {}
+    energies["bass"] = normalize_with_dynamics(raw_energies["bass"], 1.5, sub_moving_min=True)
+    energies["low_mid"] = normalize_with_dynamics(raw_energies["low_mid"], 1.3, sub_moving_min=True)
+    energies["mid"] = normalize_with_dynamics(raw_energies["mid"], 1.1)
+    energies["high_mid"] = normalize_with_dynamics(raw_energies["high_mid"], 1.0)
+    energies["high"] = normalize_with_dynamics(raw_energies["high"], 1.0)
+    energies["presence"] = normalize_with_dynamics(raw_energies["presence"], 1.0)
+
+    if return_shares:
+        return energies, raw_shares
     return energies
 
 

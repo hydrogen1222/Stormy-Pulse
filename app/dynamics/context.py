@@ -136,9 +136,18 @@ class VisualContextBuilder:
         else:
             transient_density = _clamp(onset_norm * 0.8, 0.0, 1.0)
 
-        # Rhythm Events
-        ev = self.events.get_events_near(time, window=0.08)
-        beat_impulse = ev["beat"]
+        # Rhythm Events (Strictly Causal - Most recent past beat decay)
+        beat_impulse = 0.0
+        if len(self.events.beat_positions) > 0:
+            past_indices = np.where(self.events.beat_positions <= time)[0]
+            if len(past_indices) > 0:
+                last_idx = past_indices[-1]
+                t_b = float(self.events.beat_positions[last_idx])
+                b_str = float(self.events.beat_strengths[last_idx]) if len(self.events.beat_strengths) > last_idx else 0.8
+                elapsed = time - t_b
+                if elapsed <= 0.35:
+                    beat_impulse = _clamp(b_str * math.exp(-elapsed / 0.15), 0.0, 1.0)
+
         beat_conf = getattr(self.events, "beat_confidence", 0.5) if len(self.events.beat_positions) >= 3 else 0.0
 
         if "beat_density" in stats4:
@@ -154,7 +163,13 @@ class VisualContextBuilder:
 
         brightness = _clamp(frame_dict["centroid"], 0.0, 1.0)
         noise = _clamp(frame_dict["flatness"], 0.0, 1.0)
-        tilt = _clamp(high_d / (bass_d + high_d + 1e-5), 0.0, 1.0)
+
+        if "band_shares" in frame_dict and frame_dict["band_shares"] is not None and len(frame_dict["band_shares"]) == 6:
+            b_shares = frame_dict["band_shares"]
+            weights = np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0])
+            tilt = _clamp(float(np.sum(weights * b_shares)) / 5.0, 0.0, 1.0)
+        else:
+            tilt = _clamp(high_d / (bass_d + high_d + 1e-5), 0.0, 1.0)
 
         # Tonal Structure
         harm_e = frame_dict["harmonic_e"]

@@ -18,6 +18,7 @@ class RingLayer:
         self.bass_pulse = 0.0
         self.overall_pulse = 0.0
         self.broken_segments: List[int] = [0] * ring_count
+        self.damage_current: List[float] = [0.0] * ring_count
         self.phase_state = None
 
     def update(
@@ -69,6 +70,7 @@ class RingLayer:
                 self.ring_phases.append(0.0)
                 self.ring_thickness.append(1.5)
                 self.broken_segments.append(0)
+                self.damage_current.append(0.0)
 
             band_idx = min(ring * len(bands) // self.ring_count, len(bands) - 1)
             band_val = bands[band_idx] if bands else 0.0
@@ -95,13 +97,17 @@ class RingLayer:
             target_thickness = 1.1 + band_val * 7.2 + beat_strength * 10.0 + energy * 2.0
             self.ring_thickness[ring] += (target_thickness - self.ring_thickness[ring]) * 0.15 * sf
 
-            # Deterministic damage mask for broken segments
+            # Deterministic damage target & continuous annealing healing
             if fragmentation > 0.10 or defect_density > 0.15:
                 h_val = ((track_seed ^ (ring * 10007) ^ (damage_epoch * 31337)) & 0xFFFFFFFF) / 4294967295.0
-                damage_threshold = 0.88 - 0.45 * fragmentation - 0.35 * defect_density
-                self.broken_segments[ring] = 1 if h_val > damage_threshold else 0
+                damage_target = max(0.0, min(1.0, (h_val * 0.5 + 0.5 * fragmentation + 0.5 * defect_density - 0.3)))
             else:
-                self.broken_segments[ring] = 0
+                damage_target = 0.0
+
+            # Smooth annealing interpolation (healing is slower than damage creation)
+            rate = 0.20 if damage_target > self.damage_current[ring] else 0.06
+            self.damage_current[ring] += (damage_target - self.damage_current[ring]) * rate * sf
+            self.broken_segments[ring] = 1 if self.damage_current[ring] > 0.45 else 0
 
     def get_ring_data(self, index: int) -> dict:
         if 0 <= index < len(self.ring_radii):
@@ -110,6 +116,7 @@ class RingLayer:
                 "phase": self.ring_phases[index],
                 "thickness": self.ring_thickness[index],
                 "broken": self.broken_segments[index] > 0,
+                "damage": self.damage_current[index],
                 "rotation": self.rotation_angle,
                 "phase_state": self.phase_state,
                 "material": self.material,

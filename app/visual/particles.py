@@ -5,6 +5,11 @@ import math
 import random
 from typing import List, Tuple
 from dataclasses import dataclass
+from ..dynamics.deterministic import (
+    deterministic_float,
+    deterministic_uniform,
+    deterministic_signed,
+)
 
 
 @dataclass
@@ -51,46 +56,54 @@ class ParticleSystem:
         energy: float = 0.5,
         is_spark: bool = False,
         type: str = "normal", 
+        track_seed: int = 42,
     ):
-        """Emit particles at a position."""
+        """Emit particles at a position with deterministic pseudo-random properties."""
         count = int(max(1, count * 1.35))
-        for _ in range(count):
+        for idx in range(count):
             if len(self.particles) >= self.max_particles:
                 break
 
-            angle = random.random() * math.pi * 2
+            pid = self.next_particle_id
+            self.next_particle_id += 1
+
+            r0 = deterministic_float(track_seed, f"p_angle_{type}", pid, idx)
+            r1 = deterministic_float(track_seed, f"p_speed_{type}", pid, idx)
+            r2 = deterministic_float(track_seed, f"p_size_{type}", pid, idx)
+            r3 = deterministic_float(track_seed, f"p_life_{type}", pid, idx)
+            r4 = deterministic_signed(track_seed, f"p_hue_{type}", pid, idx, scale=1.0)
+
+            angle = r0 * math.pi * 2
             
             if type == "spark":
-                speed = 8 + energy * 12 + random.random() * 6
-                size = 1.0 + random.random() * 1.8
-                life = 25 + random.random() * 20
-                hue = hue_base + random.uniform(-15, 15)
+                speed = 8 + energy * 12 + r1 * 6
+                size = 1.0 + r2 * 1.8
+                life = 25 + r3 * 20
+                hue = hue_base + r4 * 15
                 vy_factor = 0.7
             elif type == "dust":
-                speed = 0.28 + energy * 1.1 + random.random() * 0.45
-                size = 0.55 + random.random() * 0.95
-                life = 120 + random.random() * 80
-                hue = hue_base + random.uniform(-30, 30)
+                speed = 0.28 + energy * 1.1 + r1 * 0.45
+                size = 0.55 + r2 * 0.95
+                life = 120 + r3 * 80
+                hue = hue_base + r4 * 30
                 vy_factor = 0.3
             elif type == "star":
-                speed = 0.2 + energy * 1.0 + random.random() * 0.5
-                size = 1.0 + random.random() * 2.0
-                life = 200 + random.random() * 100
-                hue = hue_base + random.uniform(-60, 60)
+                speed = 0.2 + energy * 1.0 + r1 * 0.5
+                size = 1.0 + r2 * 2.0
+                life = 200 + r3 * 100
+                hue = hue_base + r4 * 60
                 vy_factor = 0.5
             else: 
-                speed = 2.8 + energy * 8 + random.random() * 4.2
-                size = 1.4 + energy * 4.8 + random.random() * 2.8
-                life = 100 + random.random() * 60
-                hue = hue_base + random.uniform(-20, 20)
+                speed = 2.8 + energy * 8 + r1 * 4.2
+                size = 1.4 + energy * 4.8 + r2 * 2.8
+                life = 100 + r3 * 60
+                hue = hue_base + r4 * 20
                 vy_factor = 0.6
             
             speed *= (1 + chaos * 0.6)
             size *= (1 + energy * 0.6)
             life *= (1 + chaos * 0.3)
 
-            pid = self.next_particle_id
-            self.next_particle_id += 1
             particle = Particle(
                 x=x,
                 y=y,
@@ -108,24 +121,34 @@ class ParticleSystem:
             self.particles.append(particle)
 
     def emit_burst(
-        self, x: float, y: float, count: int, hue_base: float, beat_strength: float, chaos: float = 0.3, energy: float = 0.5
+        self,
+        x: float,
+        y: float,
+        count: int,
+        hue_base: float,
+        beat_strength: float,
+        chaos: float = 0.3,
+        energy: float = 0.5,
+        track_seed: int = 42,
     ):
-        """Emit a refined radial burst of data-point particles."""
+        """Emit a refined radial burst of data-point particles deterministically."""
         count = int(max(1, count * 1.6))
         for i in range(count):
-            angle = (i / count) * math.pi * 2
-            angle += (random.random() - 0.5) * 0.2
-
-            speed = 9 + beat_strength * 18 + energy * 7 + random.random() * 7
-            speed *= (1 + chaos * 0.6)
-            
-            life = 15 + random.random() * 25
-            
-            hue = hue_base + random.uniform(-10, 30)
-            size = 1.4 + beat_strength * 5 + random.random() * 2.2
-
             pid = self.next_particle_id
             self.next_particle_id += 1
+
+            r_angle = deterministic_signed(track_seed, "burst_angle", pid, i, scale=0.1)
+            r_speed = deterministic_float(track_seed, "burst_speed", pid, i)
+            r_life = deterministic_float(track_seed, "burst_life", pid, i)
+            r_hue = deterministic_signed(track_seed, "burst_hue", pid, i, scale=20.0)
+            r_size = deterministic_float(track_seed, "burst_size", pid, i)
+
+            angle = (i / count) * math.pi * 2 + r_angle
+            speed = (9 + beat_strength * 18 + energy * 7 + r_speed * 7) * (1 + chaos * 0.6)
+            life = 15 + r_life * 25
+            hue = hue_base + r_hue
+            size = 1.4 + beat_strength * 5 + r_size * 2.2
+
             particle = Particle(
                 x=x,
                 y=y,

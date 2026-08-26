@@ -43,6 +43,7 @@ class FrameFeatureSequence:
     times: np.ndarray
     frame_rate: float
     features: np.ndarray  # Shape: (n_frames, N_FEATURES)
+    band_shares: Optional[np.ndarray] = None  # Shape: (n_frames, 6) raw power shares
 
     # Feature indices
     F_RMS = 0
@@ -83,7 +84,12 @@ class FrameFeatureSequence:
         data = self.features[idx0] * (1 - t) + self.features[idx1] * t
         # Max for transient
         data[self.F_ONSET_STR] = max(self.features[idx0, self.F_ONSET_STR], self.features[idx1, self.F_ONSET_STR])
-        
+
+        if self.band_shares is not None and len(self.band_shares) > idx0:
+            b_shares = self.band_shares[idx0] * (1 - t) + self.band_shares[idx1] * t
+        else:
+            b_shares = np.full(6, 1.0 / 6.0)
+
         return {
             "rms": data[self.F_RMS],
             "peak": data[self.F_PEAK],
@@ -104,6 +110,7 @@ class FrameFeatureSequence:
             "harmonic_e": data[self.F_HARMONIC_E],
             "percussive_e": data[self.F_PERCUSSIVE_E],
             "chroma": data[self.F_CHROMA_START : self.F_CHROMA_START + 12],
+            "band_shares": b_shares,
         }
 
 
@@ -122,15 +129,33 @@ class EventFeatureSet:
         beat_str = 0.0
         onset_str = 0.0
         
-        # Binary search could be faster, but array is small enough
         beat_idx = np.where(np.abs(self.beat_positions - time) <= window)[0]
         if len(beat_idx) > 0:
-            beat_str = np.max(self.beat_strengths[beat_idx])
+            beat_str = float(np.max(self.beat_strengths[beat_idx]))
             
         onset_idx = np.where(np.abs(self.onset_positions - time) <= window)[0]
         if len(onset_idx) > 0:
-            onset_str = np.max(self.onset_strengths[onset_idx])
+            onset_str = float(np.max(self.onset_strengths[onset_idx]))
             
+        return {"beat": beat_str, "onset": onset_str}
+
+    def get_events_crossed(self, prev_time: float, curr_time: float) -> Dict[str, float]:
+        """Get events strictly crossed between prev_time and curr_time (prev_time < event <= curr_time)."""
+        beat_str = 0.0
+        onset_str = 0.0
+
+        if len(self.beat_positions) > 0 and curr_time > prev_time:
+            i0 = np.searchsorted(self.beat_positions, prev_time, side="right")
+            i1 = np.searchsorted(self.beat_positions, curr_time, side="right")
+            if i1 > i0:
+                beat_str = float(np.max(self.beat_strengths[i0:i1]))
+
+        if len(self.onset_positions) > 0 and curr_time > prev_time:
+            j0 = np.searchsorted(self.onset_positions, prev_time, side="right")
+            j1 = np.searchsorted(self.onset_positions, curr_time, side="right")
+            if j1 > j0:
+                onset_str = float(np.max(self.onset_strengths[j0:j1]))
+
         return {"beat": beat_str, "onset": onset_str}
 
 

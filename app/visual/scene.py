@@ -88,8 +88,14 @@ class Scene:
         self.dynamics_bundle = bundle
         self.analytical_field = AnalyticalPESField()
 
-    def seek_to(self, time: float, width: float | None = None, height: float | None = None):
-        """Seek scene to exact timestamp with non-recursive deterministic particle warmup."""
+    def rebuild_to_time(
+        self,
+        time: float,
+        width: float | None = None,
+        height: float | None = None,
+        warmup_seconds: float = 2.0,
+    ):
+        """Central single owner for transient scene rebuild and deterministic particle warmup."""
         target_time = max(0.0, float(time))
         w_w = width if width is not None else getattr(self, "viewport_width", 1280.0)
         w_h = height if height is not None else getattr(self, "viewport_height", 720.0)
@@ -110,14 +116,13 @@ class Scene:
             self.current_geometry_control = mat.geometry_control if mat is not None else None
             self.analytical_field.update(ctx, mat)
 
-            # Non-recursive warmup short transient visual state over 2.0 seconds
-            warmup_start = max(0.0, target_time - 2.0)
+            # Warmup short transient visual state over requested warmup_seconds
+            warmup_start = max(0.0, target_time - max(0.0, warmup_seconds))
             if target_time > 0.0 and hasattr(self.dynamics_bundle.context_builder.cache, "get_frame_at_time"):
                 cache = self.dynamics_bundle.context_builder.cache
                 w_dt = 0.033
                 w_times = np.arange(warmup_start, target_time, w_dt)
 
-                # Set initial warmup time before simulation step
                 self.time = warmup_start
                 for wt in w_times:
                     frame = cache.get_frame_at_time(wt)
@@ -129,6 +134,10 @@ class Scene:
             self.current_material_state = mat
             self.current_context = ctx
             self.current_geometry_control = mat.geometry_control if mat is not None else None
+
+    def seek_to(self, time: float, width: float | None = None, height: float | None = None):
+        """Seek scene to exact timestamp with non-recursive deterministic particle warmup."""
+        self.rebuild_to_time(time, width=width, height=height, warmup_seconds=2.0)
 
     def load_track_features(self, global_features: GlobalFeatureSet):
         """Load global features and create theme."""
@@ -239,16 +248,34 @@ class Scene:
         vortex_speed = (2.0 + bass * 6.0 + self.effects.beat_flash * 10.0) * dt
         self.vortex_angle += vortex_speed * (1 + chaos)
 
-        # --- EVENT DRIVEN RESPONSE ---
-        was_on_beat = self.is_on_beat
-        self.is_on_beat = beat > 0.6
-        self.beat_strength = beat_strength
+        # --- CAUSAL EVENT DRIVEN RESPONSE ---
+        prev_t = getattr(self, "last_time_processed", max(0.0, self.time - dt))
+        self.last_time_processed = self.time
 
         beat_event_triggered = False
         onset_event_triggered = False
 
-        if self.is_on_beat and not was_on_beat:
-            beat_event_triggered = True
+        # Use crossed events if available in dynamics bundle / features
+        events_obj = None
+        if self.dynamics_bundle is not None and hasattr(self.dynamics_bundle.context_builder, "events"):
+            events_obj = self.dynamics_bundle.context_builder.events
+
+        if events_obj is not None and hasattr(events_obj, "get_events_crossed"):
+            crossed = events_obj.get_events_crossed(prev_t, self.time)
+            if crossed["beat"] > 0.4:
+                beat_event_triggered = True
+                self.beat_strength = crossed["beat"]
+                self.is_on_beat = True
+            else:
+                self.is_on_beat = False
+        else:
+            was_on_beat = self.is_on_beat
+            self.is_on_beat = beat > 0.6
+            self.beat_strength = beat_strength
+            if self.is_on_beat and not was_on_beat:
+                beat_event_triggered = True
+
+        if beat_event_triggered:
             self.last_beat_time = self.time
             self.effects.trigger_beat(max(0.7, self.beat_strength))
 

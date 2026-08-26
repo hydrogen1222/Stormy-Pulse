@@ -85,7 +85,7 @@ class FeatureExtractor:
             with concurrent.futures.ThreadPoolExecutor() as executor:
                 f_rms = executor.submit(compute_rms, y, self.n_fft, self.hop_length)
                 f_peak = executor.submit(compute_peak_energy, y, self.n_fft, self.hop_length)
-                f_bands = executor.submit(compute_band_energies_6, S_power, self.n_fft, sr)
+                f_bands = executor.submit(compute_band_energies_6, S_power, self.n_fft, sr, True)
                 f_centroid = executor.submit(compute_spectral_centroid, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
                 f_rolloff = executor.submit(compute_spectral_rolloff, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
                 f_bandwidth = executor.submit(compute_spectral_bandwidth, y, sr, self.hop_length)
@@ -100,7 +100,7 @@ class FeatureExtractor:
 
                 rms = f_rms.result()
                 peak = f_peak.result()
-                bands = f_bands.result()
+                bands, raw_shares_mat = f_bands.result()
                 centroid = f_centroid.result()
                 rolloff = f_rolloff.result()
                 bandwidth = f_bandwidth.result()
@@ -138,12 +138,15 @@ class FeatureExtractor:
             
             # Fill Chroma (transpose to match frames)
             c_len = min(n_frames, chroma.shape[1])
-            features_matrix[:c_len, FrameFeatureSequence.F_CHROMA_START:FrameFeatureSequence.F_CHROMA_START+12] = chroma[:, :c_len].T
+            features_matrix[:c_len, FrameFeatureSequence.F_CHROMA_START : FrameFeatureSequence.F_CHROMA_START + 12] = chroma.T[:c_len]
+
+            band_shares_seq = raw_shares_mat.T[:n_frames] if raw_shares_mat.shape[1] >= n_frames else raw_shares_mat.T
 
             frame_seq = FrameFeatureSequence(
                 times=times,
                 frame_rate=sr / self.hop_length,
-                features=features_matrix
+                features=features_matrix,
+                band_shares=band_shares_seq,
             )
 
             # --- LEVEL 2: Event-level Features ---

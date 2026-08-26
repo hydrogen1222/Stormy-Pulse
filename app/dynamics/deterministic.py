@@ -29,3 +29,11 @@ def deterministic_uniform(
     """Generate deterministic float in [low, high)."""
     f = deterministic_float(track_seed, stream_id, tick, event_idx)
     return low + f * (high - low)
+
+
+def deterministic_signed(
+    track_seed: int, stream_id: str, tick: int, event_idx: int = 0, scale: float = 1.0
+) -> float:
+    """Generate deterministic float in [-scale, +scale)."""
+    f = deterministic_float(track_seed, stream_id, tick, event_idx)
+    return (f * 2.0 - 1.0) * scale

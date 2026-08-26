@@ -168,11 +168,11 @@ def _render_segment_worker(
         report_every = max(1, (end_frame - start_frame) // 24)
 
         try:
-            warmup_start = max(0, start_frame - max(0, int(preroll_frames)))
-            if warmup_start < start_frame:
-                renderer.scene.seek_to(warmup_start * dt)
+            start_time = max(0.0, start_frame * dt)
+            preroll_sec = float(preroll_frames) * dt
+            renderer.scene.rebuild_to_time(start_time, width=width, height=height, warmup_seconds=preroll_sec)
 
-            for frame_index in range(warmup_start, end_frame):
+            for frame_index in range(start_frame, end_frame):
                 if cancel_event.is_set():
                     raise VideoExportCancelled("用户取消导出")
 
@@ -180,9 +180,6 @@ def _render_segment_worker(
                 frame = cache.get_frame_at_time(t)
                 renderer.set_playback_position(t)
                 renderer.scene.update(frame, frame is not None, float(width), float(height), dt)
-
-                if frame_index < start_frame:
-                    continue
 
                 image = renderer.render_to_image(width, height, dt, reuse_buffer=True)
                 _write_image_to_stream(proc.stdin, image)

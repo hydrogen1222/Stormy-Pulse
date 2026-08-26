@@ -26,6 +26,12 @@ from PySide6.QtWidgets import QWidget
 
 from ..config.settings import settings
 from ..core.lyrics import TrackLyrics
+from ..dynamics.deterministic import (
+    deterministic_hash_uint64,
+    deterministic_float,
+    deterministic_uniform,
+    deterministic_signed,
+)
 from .scene import Scene
 from .themes import Theme
 
@@ -111,16 +117,17 @@ class VisualizerRenderer(QWidget):
         self.title_alpha = 0.0
         self._typography_cache_key = None
         
-        # Use song's unique fingerprint (from analysis) to seed all visual randomness
+        # Use song's unique fingerprint to seed all visual randomness statelessly
         seed_source = fingerprint if fingerprint else f"{title}_{artist}"
-        import random
-        state = random.getstate() # Preserve global state
-        random.seed(seed_source)
+        t_seed = deterministic_hash_uint64(0, seed_source, 0)
         self._grain_points = [
-            (random.random(), random.random(), 0.4 + random.random() * 0.6)
-            for _ in range(1300)
+            (
+                deterministic_float(t_seed, "grain_x", 0, i),
+                deterministic_float(t_seed, "grain_y", 0, i),
+                0.4 + deterministic_float(t_seed, "grain_s", 0, i) * 0.6,
+            )
+            for i in range(1300)
         ]
-        random.setstate(state) # Restore global state
 
     def set_lyrics(self, lyrics: Optional[TrackLyrics]):
         self.track_lyrics = lyrics
@@ -605,16 +612,27 @@ class VisualizerRenderer(QWidget):
     def _draw_structure_reactor(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
-        """Heavy fragmented shell style."""
+        """Heavy fragmented shell style continuously morphed by GeometryControl."""
         dna = self.scene.theme
         base = self._safe_base(width, height)
         max_radius = self._safe_radius(width, height) * 0.96
+        geom = getattr(self.scene, "current_geometry_control", None)
+        mat = getattr(self.scene, "current_material_state", None)
+
+        symmetry = geom.symmetry if geom is not None else 0.5
+        circulation = geom.circulation if geom is not None else 0.2
+        fragmentation = geom.fragmentation if geom is not None else 0.1
+        roughness = geom.roughness if geom is not None else 0.0
+        defect_density = mat.defect_density if mat is not None else 0.0
 
         for i in range(dna.ring_count):
             data = self.scene.ring_layer.get_ring_data(i)
             radius = data["radius"] * max_radius
             if radius < base * 0.014:
                 continue
+
+            if roughness > 0.05:
+                radius += math.sin(self.scene.time * 5.0 + i * 2.0) * base * 0.015 * roughness
 
             role = "primary" if i % 2 == 0 else "secondary"
             color = QColor(*dna.get_color(role=role, alpha=0.78))
@@ -623,9 +641,15 @@ class VisualizerRenderer(QWidget):
             painter.setPen(pen)
 
             rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
-            rot = math.degrees(data["rotation"] * (1.0 + i * 0.18))
-            seg_a = 18 + data["radius"] * 28
-            seg_b = 14 + data["radius"] * 22
+            rot = math.degrees(data["rotation"] * (1.0 + i * (0.18 + circulation * 0.40)))
+            seg_a = (18 + data["radius"] * 28) * (0.6 + 0.8 * symmetry) * (1.0 - 0.5 * fragmentation)
+            seg_b = (14 + data["radius"] * 22) * (0.6 + 0.8 * symmetry) * (1.0 - 0.5 * fragmentation)
+
+            # Skip drawing if fragmented defect is high
+            if data.get("broken", False) or (fragmentation + defect_density > 1.2 and i % 3 == 0):
+                seg_a *= 0.3
+                seg_b *= 0.3
+
             painter.drawArc(rect, int(rot * 16), int(seg_a * 16))
             painter.drawArc(rect, int((rot + 180) * 16), int(seg_b * 16))
 
@@ -636,21 +660,29 @@ class VisualizerRenderer(QWidget):
     def _draw_structure_vortex(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
-        """Swirling energy bands style."""
+        """Swirling energy bands style continuously morphed by GeometryControl."""
         dna = self.scene.theme
         base = self._safe_base(width, height)
         max_radius = self._safe_radius(width, height) * 0.96
+        geom = getattr(self.scene, "current_geometry_control", None)
+
+        circulation = geom.circulation if geom is not None else 0.5
+        coherence = geom.coherence if geom is not None else 0.5
+        roughness = geom.roughness if geom is not None else 0.0
+        symmetry = geom.symmetry if geom is not None else 0.5
 
         for i in range(dna.ring_count):
             data = self.scene.ring_layer.get_ring_data(i)
             path = QPainterPath()
             role = "primary" if i % 2 == 0 else "secondary"
             color = QColor(*dna.get_color(role=role, alpha=0.60))
-            pts = 72
+            pts = int(72 * (0.6 + 0.8 * coherence))
             for j in range(pts + 1):
-                t = j / pts
-                angle = t * math.pi * 2 + data["rotation"] * (1.0 + i * 0.10)
-                r_noise = math.sin(angle * 3 + self.scene.time * 2.1) * (data["radius"] * max_radius * 0.05)
+                t = j / max(1.0, float(pts))
+                spiral_twist = (1.0 + 2.5 * circulation)
+                angle = t * math.pi * 2 * spiral_twist + data["rotation"] * (1.0 + i * 0.10)
+                lobes = max(2, int(round(3 * symmetry)))
+                r_noise = math.sin(angle * lobes + self.scene.time * 2.1) * (data["radius"] * max_radius * (0.05 + roughness * 0.08))
                 r = (data["radius"] * max_radius) * (0.90 + t * 0.20) + r_noise
                 x = cx + math.cos(angle) * r
                 y = cy + math.sin(angle) * r
@@ -664,20 +696,32 @@ class VisualizerRenderer(QWidget):
     def _draw_structure_pulse(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
-        """Radial pulse line style."""
+        """Radial pulse line style continuously morphed by GeometryControl."""
         dna = self.scene.theme
         base = self._safe_base(width, height)
         safe_radius = self._safe_radius(width, height)
         max_radius = safe_radius * 0.94
-        line_count = 26 + dna.ring_count * 7
+        geom = getattr(self.scene, "current_geometry_control", None)
+
+        angular_lock = geom.angular_lock if geom is not None else 0.5
+        circulation = geom.circulation if geom is not None else 0.2
+        fragmentation = geom.fragmentation if geom is not None else 0.1
+        roughness = geom.roughness if geom is not None else 0.0
+
+        line_count = int((26 + dna.ring_count * 7) * (0.7 + 0.6 * angular_lock))
 
         for i in range(line_count):
-            angle = (i / line_count) * math.pi * 2 + self.scene.vortex_angle * 0.2
+            if fragmentation > 0.4 and (i % 4 == 0):
+                continue
+
+            angle = (i / max(1.0, float(line_count))) * math.pi * 2 + self.scene.vortex_angle * (0.2 + 0.8 * circulation)
             ring_idx = i % dna.ring_count
             data = self.scene.ring_layer.get_ring_data(ring_idx)
 
             r_inner = _clamp(self.scene.energy_core.size * 0.8, base * 0.03, base * 0.16)
             r_outer = r_inner + data["radius"] * max_radius * 0.78
+            if roughness > 0.1:
+                r_outer += math.sin(i * 3.0 + self.scene.time * 4.0) * base * 0.02 * roughness
             r_outer = min(r_outer, safe_radius * 0.98)
 
             role = "primary" if ring_idx % 2 == 0 else "secondary"
@@ -693,10 +737,15 @@ class VisualizerRenderer(QWidget):
     def _draw_structure_organic(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
-        """Wobbly organic ring style."""
+        """Wobbly organic ring style continuously morphed by GeometryControl."""
         dna = self.scene.theme
         base = self._safe_base(width, height)
         max_radius = self._safe_radius(width, height) * 0.88
+        geom = getattr(self.scene, "current_geometry_control", None)
+
+        symmetry = geom.symmetry if geom is not None else 0.5
+        coherence = geom.coherence if geom is not None else 0.5
+        roughness = geom.roughness if geom is not None else 0.1
 
         for i in range(dna.ring_count):
             data = self.scene.ring_layer.get_ring_data(i)
@@ -705,11 +754,12 @@ class VisualizerRenderer(QWidget):
             color = QColor(*dna.get_color(role=role, alpha=0.60))
 
             path = QPainterPath()
-            pts = 84
+            pts = int(84 * (0.6 + 0.8 * coherence))
+            lobes = max(3, int(round(4 * symmetry)))
             for j in range(pts + 1):
-                angle = (j / pts) * math.pi * 2
-                wobble_1 = math.sin(angle * 4 + self.scene.time * 3.0) * (base * 0.018)
-                wobble_2 = math.cos(angle * 7 - self.scene.time * 2.0) * (base * 0.011)
+                angle = (j / max(1.0, float(pts))) * math.pi * 2
+                wobble_1 = math.sin(angle * lobes + self.scene.time * 3.0) * (base * (0.012 + roughness * 0.020))
+                wobble_2 = math.cos(angle * (lobes + 3) - self.scene.time * 2.0) * (base * (0.008 + roughness * 0.015))
                 r = radius + (wobble_1 + wobble_2) * data["radius"]
                 x = cx + math.cos(angle + data["rotation"]) * r
                 y = cy + math.sin(angle + data["rotation"]) * r
@@ -877,19 +927,30 @@ class VisualizerRenderer(QWidget):
         if intensity < 0.06:
             return
 
+        geom = getattr(self.scene, "current_geometry_control", None)
+        mat = getattr(self.scene, "current_material_state", None)
+
+        circulation = geom.circulation if geom is not None else 0.2
+        coherence = geom.coherence if geom is not None else 0.5
+        fragmentation = geom.fragmentation if geom is not None else 0.1
+        defect_density = mat.defect_density if mat is not None else 0.0
+
         r_acc, g_acc, b_acc, _ = theme.get_color(role="accent", alpha=1.0)
         r_pri, g_pri, b_pri, _ = theme.get_color(role="foreground_primary", alpha=1.0)
-        ray_count = int(_clamp(20 + intensity * 58 + density * 16, 20, 96))
+        ray_count = int(_clamp((20 + intensity * 58 + density * 16) * (0.7 + 0.6 * coherence), 16, 96))
         inner_r = _clamp(self.scene.energy_core.size * 0.80, base * 0.04, safe_radius * 0.36)
         outer_base = safe_radius * (0.28 + intensity * 0.42 + tension * 0.10)
-        angle_speed = 0.18 + high * 0.55 + beat * 0.35
+        angle_speed = (0.18 + high * 0.55 + beat * 0.35) * (1.0 + 1.2 * circulation)
 
         painter.save()
         painter.setBrush(Qt.BrushStyle.NoBrush)
         for idx in range(ray_count):
+            if (fragmentation > 0.3 or defect_density > 0.4) and (idx % 3 == 0):
+                continue
+
             t = idx / max(1.0, float(ray_count))
-            angle = t * math.pi * 2 + self.scene.time * angle_speed
-            variance = 0.80 + 0.20 * math.sin(self.scene.time * 4.4 + idx * 0.77)
+            angle = t * math.pi * 2 + self.scene.time * angle_speed + math.sin(idx * 0.3) * circulation * 0.4
+            variance = 0.80 + 0.20 * math.sin(self.scene.time * 4.4 + idx * 0.77) * (0.5 + 0.5 * coherence)
             outer_r = inner_r + outer_base * variance
 
             x1 = cx + math.cos(angle) * inner_r

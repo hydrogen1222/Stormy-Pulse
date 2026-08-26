@@ -20,7 +20,7 @@ ENERGY_RATIO_MID = 0.5
 ENERGY_RATIO_HIGH = 1.0
 
 # Caching
-CACHE_VERSION = "v5"
+CACHE_VERSION = "v6"
 CACHE_EXT = ".npz"
 
 # Visualization constants
