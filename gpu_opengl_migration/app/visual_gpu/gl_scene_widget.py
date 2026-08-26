@@ -64,6 +64,7 @@ class OpenGLSceneWidget(QOpenGLWidget):
         pass
 
     def resizeGL(self, width: int, height: int):
+        self.bridge.resize(width, height)
         self.bridge._layout_state = {}
 
     def paintGL(self):

@@ -717,343 +717,26 @@ class MainWindow(QWidget):
         self._on_next()
 
     def _on_settings_clicked(self):
-        """Show settings dialog."""
-        from PySide6.QtWidgets import QDialog, QVBoxLayout, QComboBox, QFormLayout, QDialogButtonBox, QCheckBox, QGroupBox, QFontComboBox, QDoubleSpinBox, QPushButton, QTabWidget, QScrollArea
-        
-        dialog = QDialog(self)
-        dialog.setWindowTitle("引擎设置")
-        dialog.resize(560, 520)
-        dialog.setStyleSheet("background: #16162a; color: white;")
-        
-        layout = QVBoxLayout(dialog)
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #3b4164; border-radius: 8px; }
-            QTabBar::tab { background: #252942; color: #c8d1ff; padding: 7px 14px; border-top-left-radius: 6px; border-top-right-radius: 6px; }
-            QTabBar::tab:selected { background: #3a4168; color: #ffffff; }
-        """)
-        layout.addWidget(tabs, 1)
-
-        basic_page = QWidget()
-        basic_layout = QVBoxLayout(basic_page)
-        basic_layout.setContentsMargins(10, 10, 10, 10)
-        basic_layout.setSpacing(10)
-
-        hud_page = QWidget()
-        hud_page_layout = QVBoxLayout(hud_page)
-        hud_page_layout.setContentsMargins(10, 10, 10, 10)
-        hud_page_layout.setSpacing(10)
-
-        font_page = QWidget()
-        font_page_layout = QVBoxLayout(font_page)
-        font_page_layout.setContentsMargins(10, 10, 10, 10)
-        font_page_layout.setSpacing(10)
-
-        tune_page = QWidget()
-        tune_page_layout = QVBoxLayout(tune_page)
-        tune_page_layout.setContentsMargins(10, 10, 10, 10)
-        tune_page_layout.setSpacing(10)
-        tune_scroll = QScrollArea()
-        tune_scroll.setWidgetResizable(True)
-        tune_scroll.setFrameShape(QFrame.Shape.NoFrame)
-        tune_scroll.setWidget(tune_page)
-
-        tabs.addTab(basic_page, "Basic")
-        tabs.addTab(hud_page, "HUD")
-        tabs.addTab(font_page, "Fonts")
-        tabs.addTab(tune_scroll, "Layout")
-        
-        # --- Performance Group ---
-        perf_group = QGroupBox("性能与显示")
-        perf_group.setStyleSheet("color: #aaaacc;")
-        perf_layout = QFormLayout(perf_group)
-        
-        fps_combo = QComboBox()
-        fps_options = ["60", "120", "144", "165", "No Limit"]
-        fps_combo.addItems(fps_options)
-        
-        current_fps = self.settings.get("fps", 60)
-        if current_fps == 0:
-            fps_combo.setCurrentText("No Limit")
-        else:
-            fps_combo.setCurrentText(str(current_fps))
-        
-        perf_layout.addRow("目标帧率:", fps_combo)
-        
-        cb_fps = QCheckBox("显示 FPS 计数")
-        cb_fps.setChecked(self.settings.get("show_fps", True))
-        perf_layout.addRow("", cb_fps)
-
-        canvas_ratio_combo = QComboBox()
-        canvas_ratio_combo.addItems(["16:9", "9:16"])
-        canvas_ratio_combo.setCurrentText(self.settings.get("visual_canvas_ratio", "16:9"))
-        perf_layout.addRow("画布比例:", canvas_ratio_combo)
-        
-        render_backend_combo = QComboBox()
-        render_backend_combo.addItem("CPU", "cpu")
-        render_backend_combo.addItem("GPU", "gpu")
-        if not self._gpu_available:
-            render_backend_combo.setItemData(1, 0, Qt.ItemDataRole.UserRole - 1)
-            render_backend_combo.setToolTip("GPU renderer is unavailable in this environment")
-        render_backend_combo.setCurrentIndex(1 if self._render_backend == "gpu" and self._gpu_available else 0)
-        perf_layout.addRow("Render:", render_backend_combo)
-
-        basic_layout.addWidget(perf_group)
-        basic_layout.addStretch()
-        
-        # --- HUD Group ---
-        hud_group = QGroupBox("界面元素 (HUD)")
-        hud_group.setStyleSheet("color: #aaaacc;")
-        hud_layout = QFormLayout(hud_group)
-        
-        cb_top_title = QCheckBox("显示顶部歌曲名")
-        cb_top_title.setChecked(self.settings.get("show_track_title", True))
-        hud_layout.addRow("", cb_top_title)
-        
-        cb_left_hud = QCheckBox("显示左下角面板")
-        cb_left_hud.setChecked(self.settings.get("show_left_hud", True))
-        hud_layout.addRow("", cb_left_hud)
-        
-        cb_right_hud = QCheckBox("显示右下角监控")
-        cb_right_hud.setChecked(self.settings.get("show_right_hud", True))
-        hud_layout.addRow("", cb_right_hud)
-
-        cb_lyrics = QCheckBox("显示右侧歌词")
-        cb_lyrics.setChecked(self.settings.get("show_lyrics", False))
-        hud_layout.addRow("", cb_lyrics)
-        
-        cb_dev_hud = QCheckBox("开发者模式 (DNA详情)")
-        cb_dev_hud.setChecked(self.settings.get("show_dev_hud", False))
-        hud_layout.addRow("", cb_dev_hud)
-
-        hud_page_layout.addWidget(hud_group)
-        hud_page_layout.addStretch()
-
-        font_group = QGroupBox("字体")
-        font_group.setStyleSheet("color: #aaaacc;")
-        font_layout = QFormLayout(font_group)
-
-        title_font_combo = QFontComboBox()
-        title_font_combo.setCurrentFont(QFont(self.settings.get("title_font_family", "") or "Segoe UI"))
-        font_layout.addRow("歌曲名:", title_font_combo)
-
-        artist_font_combo = QFontComboBox()
-        artist_font_combo.setCurrentFont(QFont(self.settings.get("artist_font_family", "") or "Segoe UI"))
-        font_layout.addRow("艺术家:", artist_font_combo)
-
-        lyric_original_font_combo = QFontComboBox()
-        lyric_original_font_combo.setCurrentFont(
-            QFont(
-                self.settings.get("lyric_original_font_family", "")
-                or self.settings.get("lyric_font_family", "")
-                or "Microsoft YaHei UI"
-            )
-        )
-        font_layout.addRow("原文歌词:", lyric_original_font_combo)
-
-        lyric_translation_font_combo = QFontComboBox()
-        lyric_translation_font_combo.setCurrentFont(
-            QFont(
-                self.settings.get("lyric_translation_font_family", "")
-                or self.settings.get("lyric_font_family", "")
-                or "Microsoft YaHei UI"
-            )
-        )
-        font_layout.addRow("译文歌词:", lyric_translation_font_combo)
-
-        font_page_layout.addWidget(font_group)
-        font_page_layout.addStretch()
-
-        tune_group = QGroupBox("Typography & Layout")
-        tune_group.setStyleSheet("color: #aaaacc;")
-        tune_layout = QFormLayout(tune_group)
-
-        def _make_offset_spin(value: float) -> QDoubleSpinBox:
-            spin = QDoubleSpinBox()
-            spin.setRange(-50.0, 50.0)
-            spin.setSingleStep(0.5)
-            spin.setDecimals(1)
-            spin.setSuffix("%")
-            spin.setValue(float(value))
-            return spin
-
-        def _make_scale_spin(value: float) -> QDoubleSpinBox:
-            spin = QDoubleSpinBox()
-            spin.setRange(0.5, 2.2)
-            spin.setSingleStep(0.05)
-            spin.setDecimals(2)
-            spin.setValue(float(value))
-            return spin
-
-        def _make_module_scale_spin(value: float) -> QDoubleSpinBox:
-            spin = QDoubleSpinBox()
-            spin.setRange(0.65, 1.85)
-            spin.setSingleStep(0.05)
-            spin.setDecimals(2)
-            spin.setValue(float(value))
-            return spin
-
-        def _pair_widget(x_spin: QDoubleSpinBox, y_spin: QDoubleSpinBox) -> QWidget:
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(6)
-            row_layout.addWidget(QLabel("X"))
-            row_layout.addWidget(x_spin)
-            row_layout.addWidget(QLabel("Y"))
-            row_layout.addWidget(y_spin)
-            return row
-
-        title_x_spin = _make_offset_spin(self.settings.get("layout_title_x", 0.0))
-        title_y_spin = _make_offset_spin(self.settings.get("layout_title_y", 0.0))
-        artist_x_spin = _make_offset_spin(self.settings.get("layout_artist_x", 0.0))
-        artist_y_spin = _make_offset_spin(self.settings.get("layout_artist_y", 0.0))
-        lyrics_x_spin = _make_offset_spin(self.settings.get("layout_lyrics_x", 0.0))
-        lyrics_y_spin = _make_offset_spin(self.settings.get("layout_lyrics_y", 0.0))
-        left_hud_x_spin = _make_offset_spin(self.settings.get("layout_left_hud_x", 0.0))
-        left_hud_y_spin = _make_offset_spin(self.settings.get("layout_left_hud_y", 0.0))
-        right_hud_x_spin = _make_offset_spin(self.settings.get("layout_right_hud_x", 0.0))
-        right_hud_y_spin = _make_offset_spin(self.settings.get("layout_right_hud_y", 0.0))
-        title_scale_spin = _make_scale_spin(self.settings.get("font_scale_title", 1.0))
-        artist_scale_spin = _make_scale_spin(self.settings.get("font_scale_artist", 1.0))
-        lyrics_scale_spin = _make_scale_spin(self.settings.get("font_scale_lyrics", 1.0))
-        hud_scale_spin = _make_scale_spin(self.settings.get("font_scale_hud", 1.0))
-        left_hud_font_scale_spin = _make_scale_spin(self.settings.get("font_scale_left_hud", 1.0))
-        right_hud_font_scale_spin = _make_scale_spin(self.settings.get("font_scale_right_hud", 1.0))
-        title_module_scale_spin = _make_module_scale_spin(self.settings.get("module_scale_title", 1.0))
-        lyrics_module_scale_spin = _make_module_scale_spin(self.settings.get("module_scale_lyrics", 1.0))
-        left_hud_module_scale_spin = _make_module_scale_spin(self.settings.get("module_scale_left_hud", 1.0))
-        right_hud_module_scale_spin = _make_module_scale_spin(self.settings.get("module_scale_right_hud", 1.0))
-        effect_module_scale_spin = _make_module_scale_spin(self.settings.get("module_scale_effect", 1.0))
-
-        tune_layout.addRow("Song Offset:", _pair_widget(title_x_spin, title_y_spin))
-        tune_layout.addRow("Artist Offset:", _pair_widget(artist_x_spin, artist_y_spin))
-        tune_layout.addRow("Lyrics Offset:", _pair_widget(lyrics_x_spin, lyrics_y_spin))
-        tune_layout.addRow("Left HUD Offset:", _pair_widget(left_hud_x_spin, left_hud_y_spin))
-        tune_layout.addRow("Right HUD Offset:", _pair_widget(right_hud_x_spin, right_hud_y_spin))
-        tune_layout.addRow("Song Font Scale:", title_scale_spin)
-        tune_layout.addRow("Artist Font Scale:", artist_scale_spin)
-        tune_layout.addRow("Lyrics Font Scale:", lyrics_scale_spin)
-        tune_layout.addRow("HUD Font Scale (Global):", hud_scale_spin)
-        tune_layout.addRow("Left HUD Font Scale:", left_hud_font_scale_spin)
-        tune_layout.addRow("Right HUD Font Scale:", right_hud_font_scale_spin)
-        tune_layout.addRow("Title Block Size:", title_module_scale_spin)
-        tune_layout.addRow("Lyrics Block Size:", lyrics_module_scale_spin)
-        tune_layout.addRow("Left HUD Block Size:", left_hud_module_scale_spin)
-        tune_layout.addRow("Right HUD Block Size:", right_hud_module_scale_spin)
-        tune_layout.addRow("Effect Core Size:", effect_module_scale_spin)
-
-        reset_layout_btn = QPushButton("Reset Typography/Layout")
-        reset_layout_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset_layout_btn.setStyleSheet(
-            "QPushButton { background-color: #31314f; color: #d6dcff; border: 1px solid #4f5a78; border-radius: 6px; padding: 6px 10px; }"
-            "QPushButton:hover { background-color: #3b4164; }"
-            "QPushButton:pressed { background-color: #252942; }"
-        )
-
-        def _reset_typography_layout():
-            for spin in (
-                title_x_spin,
-                title_y_spin,
-                artist_x_spin,
-                artist_y_spin,
-                lyrics_x_spin,
-                lyrics_y_spin,
-                left_hud_x_spin,
-                left_hud_y_spin,
-                right_hud_x_spin,
-                right_hud_y_spin,
-            ):
-                spin.setValue(0.0)
-            for spin in (
-                title_scale_spin,
-                artist_scale_spin,
-                lyrics_scale_spin,
-                hud_scale_spin,
-                left_hud_font_scale_spin,
-                right_hud_font_scale_spin,
-                title_module_scale_spin,
-                lyrics_module_scale_spin,
-                left_hud_module_scale_spin,
-                right_hud_module_scale_spin,
-                effect_module_scale_spin,
-            ):
-                spin.setValue(1.0)
-
-        reset_layout_btn.clicked.connect(_reset_typography_layout)
-        tune_layout.addRow("", reset_layout_btn)
-
-        tune_page_layout.addWidget(tune_group)
-        tune_page_layout.addStretch()
+        """Show clean, modular settings dialog."""
+        from .settings_dialog import SettingsDialog
 
         settings_snapshot = dict(self.settings.data)
         backend_snapshot = self._render_backend
-        applying_settings = {"value": False}
 
-        def _selected_fps() -> int:
-            selected = fps_combo.currentText()
-            return 0 if selected == "No Limit" else int(selected)
-
-        def _collect_settings() -> dict:
-            selected_backend = render_backend_combo.currentData() or "cpu"
-            return {
-                "fps": _selected_fps(),
-                "visual_canvas_ratio": canvas_ratio_combo.currentText(),
-                "render_backend": selected_backend,
-                "show_fps": cb_fps.isChecked(),
-                "show_track_title": cb_top_title.isChecked(),
-                "show_left_hud": cb_left_hud.isChecked(),
-                "show_right_hud": cb_right_hud.isChecked(),
-                "show_lyrics": cb_lyrics.isChecked(),
-                "show_dev_hud": cb_dev_hud.isChecked(),
-                "title_font_family": title_font_combo.currentFont().family(),
-                "artist_font_family": artist_font_combo.currentFont().family(),
-                "lyric_font_family": lyric_original_font_combo.currentFont().family(),
-                "lyric_original_font_family": lyric_original_font_combo.currentFont().family(),
-                "lyric_translation_font_family": lyric_translation_font_combo.currentFont().family(),
-                "layout_title_x": float(title_x_spin.value()),
-                "layout_title_y": float(title_y_spin.value()),
-                "layout_artist_x": float(artist_x_spin.value()),
-                "layout_artist_y": float(artist_y_spin.value()),
-                "layout_lyrics_x": float(lyrics_x_spin.value()),
-                "layout_lyrics_y": float(lyrics_y_spin.value()),
-                "layout_left_hud_x": float(left_hud_x_spin.value()),
-                "layout_left_hud_y": float(left_hud_y_spin.value()),
-                "layout_right_hud_x": float(right_hud_x_spin.value()),
-                "layout_right_hud_y": float(right_hud_y_spin.value()),
-                "font_scale_title": float(title_scale_spin.value()),
-                "font_scale_artist": float(artist_scale_spin.value()),
-                "font_scale_lyrics": float(lyrics_scale_spin.value()),
-                "font_scale_hud": float(hud_scale_spin.value()),
-                "font_scale_left_hud": float(left_hud_font_scale_spin.value()),
-                "font_scale_right_hud": float(right_hud_font_scale_spin.value()),
-                "module_scale_title": float(title_module_scale_spin.value()),
-                "module_scale_lyrics": float(lyrics_module_scale_spin.value()),
-                "module_scale_left_hud": float(left_hud_module_scale_spin.value()),
-                "module_scale_right_hud": float(right_hud_module_scale_spin.value()),
-                "module_scale_effect": float(effect_module_scale_spin.value()),
-            }
-
-        def _refresh_visualizer_after_settings(new_values: dict):
-            interval = self._configure_update_timer(int(new_values["fps"]))
+        def _apply_new_values(new_values: dict):
+            self.settings.data.update(new_values)
+            self.settings.save()
+            self._configure_update_timer(int(new_values["fps"]))
             self.visualizer.set_target_fps(int(new_values["fps"]))
             self._set_render_backend(str(new_values["render_backend"]), persist=False)
             current_track = self.music_library.get_current_track()
             if new_values["show_lyrics"] and current_track and hasattr(self.visualizer, "set_lyrics"):
                 self.visualizer.set_lyrics(current_track.load_lyrics())
-            self.visualizer._layout_cache_key = None if hasattr(self.visualizer, "_layout_cache_key") else None
+            if hasattr(self.visualizer, "reset_layout_cache"):
+                self.visualizer.reset_layout_cache()
             self.visualizer.update()
-            return interval
 
-        def _apply_live_settings():
-            if applying_settings["value"]:
-                return
-            new_values = _collect_settings()
-            self.settings.data.update(new_values)
-            self.settings.save()
-            _refresh_visualizer_after_settings(new_values)
-
-        def _restore_settings_snapshot():
+        def _restore_snapshot():
             self.settings.data.clear()
             self.settings.data.update(settings_snapshot)
             self.settings.save()
@@ -1062,69 +745,26 @@ class MainWindow(QWidget):
             current_track = self.music_library.get_current_track()
             if self.settings.get("show_lyrics", False) and current_track and hasattr(self.visualizer, "set_lyrics"):
                 self.visualizer.set_lyrics(current_track.load_lyrics())
+            if hasattr(self.visualizer, "reset_layout_cache"):
+                self.visualizer.reset_layout_cache()
             self.visualizer.update()
 
-        live_widgets = [
-            fps_combo,
-            canvas_ratio_combo,
-            render_backend_combo,
-            cb_fps,
-            cb_top_title,
-            cb_left_hud,
-            cb_right_hud,
-            cb_lyrics,
-            cb_dev_hud,
-            title_font_combo,
-            artist_font_combo,
-            lyric_original_font_combo,
-            lyric_translation_font_combo,
-            title_x_spin,
-            title_y_spin,
-            artist_x_spin,
-            artist_y_spin,
-            lyrics_x_spin,
-            lyrics_y_spin,
-            left_hud_x_spin,
-            left_hud_y_spin,
-            right_hud_x_spin,
-            right_hud_y_spin,
-            title_scale_spin,
-            artist_scale_spin,
-            lyrics_scale_spin,
-            hud_scale_spin,
-            left_hud_font_scale_spin,
-            right_hud_font_scale_spin,
-            title_module_scale_spin,
-            lyrics_module_scale_spin,
-            left_hud_module_scale_spin,
-            right_hud_module_scale_spin,
-            effect_module_scale_spin,
-        ]
-        for widget in live_widgets:
-            if isinstance(widget, QCheckBox):
-                widget.toggled.connect(_apply_live_settings)
-            elif isinstance(widget, QComboBox):
-                widget.currentIndexChanged.connect(_apply_live_settings)
-            elif isinstance(widget, QFontComboBox):
-                widget.currentFontChanged.connect(_apply_live_settings)
-            elif isinstance(widget, QDoubleSpinBox):
-                widget.valueChanged.connect(_apply_live_settings)
+        dialog = SettingsDialog(
+            self,
+            self.settings.data,
+            gpu_available=self._gpu_available,
+            render_backend=self._render_backend,
+            on_live_update=_apply_new_values,
+        )
 
-        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        layout.addWidget(buttons)
-        
         if dialog.exec():
-            _apply_live_settings()
+            _apply_new_values(dialog.collect_settings())
             print(
                 f"[MainWindow] Settings accepted: FPS={self.settings.get('fps')}, "
-                f"CanvasRatio={self.settings.get('visual_canvas_ratio')}, Render={self.settings.get('render_backend')}, "
-                f"LeftHUD={self.settings.get('show_left_hud')}, RightHUD={self.settings.get('show_right_hud')}, "
-                f"Lyrics={self.settings.get('show_lyrics')}"
+                f"CanvasRatio={self.settings.get('visual_canvas_ratio')}, Render={self.settings.get('render_backend')}"
             )
         else:
-            _restore_settings_snapshot()
+            _restore_snapshot()
 
     def _get_feature_cache_for_track(self, track, progress_dialog=None):
         """Get analysis cache for export, extracting if necessary."""

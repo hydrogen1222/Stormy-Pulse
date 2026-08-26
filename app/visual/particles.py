@@ -136,8 +136,10 @@ class ParticleSystem:
         beat_pulse: float = 0.0,
         energy: float = 0.5,
         dt: float = 0.016,
+        pes_field=None,
+        base_radius: float = 200.0,
     ):
-        """Update particles with smooth drag physics."""
+        """Update particles with smooth drag physics and PES field forces."""
         to_remove = []
         sf = dt * 60.0
 
@@ -146,6 +148,12 @@ class ParticleSystem:
             max_trail = 5 if p.is_spark else 10
             if len(p.trail) > max_trail:
                 p.trail.pop(0)
+
+            # Apply PES Force Field if available
+            if pes_field is not None:
+                fx, fy = pes_field.sample_force(p.x, p.y, center_x, center_y, base_radius)
+                p.vx += fx * 0.08 * sf
+                p.vy += fy * 0.08 * sf
 
             drag = 0.88 if p.is_spark else 0.94 # Faster energy dissipation
             p.vx *= (1.0 - (1.0 - drag) * sf)

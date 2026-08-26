@@ -49,3 +49,9 @@ Thumbs.db
 # Project-specific artifacts and cache
 artifacts/
 .music_visualizer/
+cache/
+scratch/
+*.flac
+*.mp3
+*.wav
+*.m4a

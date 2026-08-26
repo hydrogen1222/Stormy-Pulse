@@ -142,13 +142,17 @@ class VisualizerRenderer(QWidget):
         self.scene.ring_layer.ring_count = theme.ring_count
         print(f"[Renderer] Theme loaded: {theme.name}, palette={theme.palette_family}")
 
-    def reset(self):
-        self.scene.reset()
+    def reset_layout_cache(self):
+        """Invalidate layout and typography cache."""
         self._layout_state = {}
         self._layout_cache_key = None
         self._layout_cache_value = {}
         self._typography_cache_key = None
         self._typography_cache_value = {}
+
+    def reset(self):
+        self.scene.reset()
+        self.reset_layout_cache()
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -965,7 +969,7 @@ class VisualizerRenderer(QWidget):
             r, g, b, _ = theme.get_color(role="foreground_primary", alpha=1.0)
             flash_alpha = int(effects.beat_flash * 54)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-            painter.fillRect(self.rect(), QColor(r, g, b, flash_alpha))
+            painter.fillRect(0, 0, int(width), int(height), QColor(r, g, b, flash_alpha))
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
         if effects.high_energy_flash > 0.08:
@@ -1136,15 +1140,16 @@ class VisualizerRenderer(QWidget):
                 min(fit_w, fit_h) * 0.66,
             )
 
+            window_bounds = QRectF(0, 0, width, height)
             title_dx, title_dy = self._module_offset("title", canvas_rect)
             left_dx, left_dy = self._module_offset("left_hud", canvas_rect)
             right_dx, right_dy = self._module_offset("right_hud", canvas_rect)
-            title_rect = self._shift_rect_clamped(title_rect, canvas_rect, title_dx, title_dy)
-            left_brand_rect = self._shift_rect_clamped(left_brand_rect, canvas_rect, left_dx, left_dy)
-            right_monitor_rect = self._shift_rect_clamped(right_monitor_rect, canvas_rect, right_dx, right_dy)
+            title_rect = self._shift_rect_clamped(title_rect, window_bounds, title_dx, title_dy)
+            left_brand_rect = self._shift_rect_clamped(left_brand_rect, window_bounds, left_dx, left_dy)
+            right_monitor_rect = self._shift_rect_clamped(right_monitor_rect, window_bounds, right_dx, right_dy)
             if lyrics_visible and lyrics_rect.width() > 1.0 and lyrics_rect.height() > 1.0:
                 lyrics_dx, lyrics_dy = self._module_offset("lyrics", canvas_rect)
-                lyrics_rect = self._shift_rect_clamped(lyrics_rect, canvas_rect, lyrics_dx, lyrics_dy)
+                lyrics_rect = self._shift_rect_clamped(lyrics_rect, window_bounds, lyrics_dx, lyrics_dy)
 
             return {
                 "canvas_ratio_key": canvas_ratio_key,
@@ -1314,15 +1319,16 @@ class VisualizerRenderer(QWidget):
             min(fit_w, fit_h) * 0.66,
         )
 
+        window_bounds = QRectF(0, 0, width, height)
         title_dx, title_dy = self._module_offset("title", canvas_rect)
         left_dx, left_dy = self._module_offset("left_hud", canvas_rect)
         right_dx, right_dy = self._module_offset("right_hud", canvas_rect)
-        title_rect = self._shift_rect_clamped(title_rect, canvas_rect, title_dx, title_dy)
-        left_brand_rect = self._shift_rect_clamped(left_brand_rect, canvas_rect, left_dx, left_dy)
-        right_monitor_rect = self._shift_rect_clamped(right_monitor_rect, canvas_rect, right_dx, right_dy)
+        title_rect = self._shift_rect_clamped(title_rect, window_bounds, title_dx, title_dy)
+        left_brand_rect = self._shift_rect_clamped(left_brand_rect, window_bounds, left_dx, left_dy)
+        right_monitor_rect = self._shift_rect_clamped(right_monitor_rect, window_bounds, right_dx, right_dy)
         if lyrics_visible and lyrics_rect.width() > 1.0 and lyrics_rect.height() > 1.0:
             lyrics_dx, lyrics_dy = self._module_offset("lyrics", canvas_rect)
-            lyrics_rect = self._shift_rect_clamped(lyrics_rect, canvas_rect, lyrics_dx, lyrics_dy)
+            lyrics_rect = self._shift_rect_clamped(lyrics_rect, window_bounds, lyrics_dx, lyrics_dy)
 
         return {
             "canvas_ratio_key": canvas_ratio_key,
@@ -1804,11 +1810,6 @@ class VisualizerRenderer(QWidget):
         active_rect = content_rect
         active_corner = max(active_rect.height() * 0.12, 6.0)
 
-        # Subtle emphasis background
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(acc_r, acc_g, acc_b, int(alpha * 0.20)))
-        painter.drawRoundedRect(active_rect, active_corner, active_corner)
-
         # Vertical indicator bar
         bar_rect = QRectF(
             active_rect.left() + active_rect.width() * 0.008,
@@ -1914,12 +1915,8 @@ class VisualizerRenderer(QWidget):
         fog_color: QColor,
         opacity: float,
     ):
-        """Very restrained local fog to keep text readable without card panels."""
-        expanded = rect.adjusted(-rect.width() * 0.06, -rect.height() * 0.14, rect.width() * 0.06, rect.height() * 0.14)
-        grad = QRadialGradient(expanded.center(), max(expanded.width(), expanded.height()) * 0.68)
-        grad.setColorAt(0.0, QColor(fog_color.red(), fog_color.green(), fog_color.blue(), int(24 * opacity)))
-        grad.setColorAt(1.0, QColor(fog_color.red(), fog_color.green(), fog_color.blue(), 0))
-        painter.fillRect(expanded, grad)
+        """No-op to eliminate card tile seam artifacts, keeping text floating seamlessly."""
+        pass
 
     def _format_family_name(self, family: str) -> str:
         return family.replace("_", " ").upper()

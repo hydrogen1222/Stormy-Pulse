@@ -19,7 +19,7 @@ class TrackAnalysisMetadata:
 
 @dataclass
 class FeatureFrame:
-    """Legacy/Compat frame representation."""
+    """Frame representation with rich audio features."""
     time: float
     rms: float
     bass: float
@@ -31,6 +31,10 @@ class FeatureFrame:
     spectral_flatness: float
     beat: float
     beat_strength: float
+    chroma_vector: np.ndarray = field(default_factory=lambda: np.zeros(12))
+    harmonic_e: float = 0.5
+    percussive_e: float = 0.5
+    flux: float = 0.0
 
 
 @dataclass
@@ -98,7 +102,8 @@ class FrameFeatureSequence:
             "onset_strength": data[self.F_ONSET_STR],
             "zcr": data[self.F_ZCR],
             "harmonic_e": data[self.F_HARMONIC_E],
-            "percussive_e": data[self.F_PERCUSSIVE_E]
+            "percussive_e": data[self.F_PERCUSSIVE_E],
+            "chroma": data[self.F_CHROMA_START : self.F_CHROMA_START + 12],
         }
 
 
@@ -282,7 +287,11 @@ class FeatureCache:
             spectral_rolloff=frame_dict["rolloff"],
             spectral_flatness=frame_dict["flatness"],
             beat=1.0 if ev["beat"] > 0 else 0.0,
-            beat_strength=ev["beat"]
+            beat_strength=ev["beat"],
+            chroma_vector=frame_dict.get("chroma", np.zeros(12)),
+            harmonic_e=frame_dict.get("harmonic_e", 0.5),
+            percussive_e=frame_dict.get("percussive_e", 0.5),
+            flux=frame_dict.get("flux", 0.0),
         )
 
     def get_window_stats_at_time(self, time: float, window_size: int = 4) -> Dict[str, float]:

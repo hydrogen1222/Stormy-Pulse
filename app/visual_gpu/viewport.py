@@ -1,6 +1,8 @@
 """Composite visualizer viewport for the OpenGL migration renderer."""
 from __future__ import annotations
 
+import time
+
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
 
@@ -8,6 +10,8 @@ from ..config.settings import settings
 from ..visual.scene import Scene
 from .gl_scene_widget import OpenGLSceneWidget
 from .hud_overlay import HudOverlayRenderer
+
+_FBO_WATCHDOG_INTERVAL = 2.0  # seconds
 
 
 class VisualizerViewport(QWidget):
@@ -20,6 +24,7 @@ class VisualizerViewport(QWidget):
         self.track_artist = ""
         self.track_lyrics = None
         self.playback_position = 0.0
+        self._last_fbo_watchdog = 0.0
         self.gl_widget = OpenGLSceneWidget(self.scene, self)
         self.overlay = HudOverlayRenderer(self.scene, self)
         self.gl_widget.raise_()
@@ -91,14 +96,20 @@ class VisualizerViewport(QWidget):
         self.gl_widget.stop()
         self.overlay.stop()
 
+    def reset_layout_cache(self):
+        """Reset layout and typography cache across GL widget and HUD overlay."""
+        self.gl_widget.reset_layout_cache()
+        self.overlay.reset_layout_cache()
+        self._rebuild_layout_state()
+        self._sync_overlay_state()
+
     def reset(self):
         self.scene.reset()
         self.gl_widget.set_scene(self.scene)
         self.overlay.scene = self.scene
         self.gl_widget.reset()
         self.overlay.reset()
-        self._rebuild_layout_state()
-        self._sync_overlay_state()
+        self.reset_layout_cache()
 
     def render_to_image(self, width: int, height: int, frame_dt: float = 0.016) -> QImage:
         """Render a composited frame from the GL scene and HUD overlay."""
@@ -137,4 +148,19 @@ class VisualizerViewport(QWidget):
         self._sync_overlay_state()
         self.gl_widget.update()
         self.overlay.update()
+        self._run_fbo_watchdog()
         super().update()
+
+    def _run_fbo_watchdog(self):
+        """Periodically verify the GL framebuffer matches the widget size.
+
+        Window-state races (minimize/restore around resizes) can leave the
+        QOpenGLWidget framebuffer at a stale size, which renders the scene
+        clipped with a black block on the remainder (visible GPU-mode bug).
+        The watchdog detects and repairs that state within a couple seconds.
+        """
+        now = time.monotonic()
+        if now - self._last_fbo_watchdog < _FBO_WATCHDOG_INTERVAL:
+            return
+        self._last_fbo_watchdog = now
+        self.gl_widget.check_framebuffer_size()

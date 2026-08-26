@@ -3,7 +3,11 @@ Settings manager for the music visualizer.
 """
 import json
 import os
+import shutil
 from pathlib import Path
+from typing import Optional
+
+from .constants import CACHE_EXT
 
 DEFAULT_SETTINGS = {
     "fps": 60,
@@ -90,10 +94,73 @@ class Settings:
         self.save()
 
     def get_cache_dir(self) -> Path:
-        """Get the cache directory."""
+        """Get the feature-cache directory.
+
+        The cache lives in a project-local ``cache/`` folder next to the
+        source code so users can easily inspect and manage it, instead of
+        a hidden folder inside the user profile. Falls back to the legacy
+        home directory when the project location is not usable (e.g. a
+        non-editable install inside site-packages).
+        """
+        root = self._project_cache_root()
+        if root is not None:
+            cache_dir = root / "cache"
+            try:
+                cache_dir.mkdir(parents=True, exist_ok=True)
+                self._migrate_legacy_home_cache(cache_dir)
+                return cache_dir
+            except OSError as exc:
+                print(
+                    f"[Settings] Project cache dir unavailable ({exc}); "
+                    "falling back to home directory"
+                )
+
         cache_dir = self.config_dir / "cache"
         cache_dir.mkdir(parents=True, exist_ok=True)
         return cache_dir
+
+    @staticmethod
+    def _project_cache_root() -> Optional[Path]:
+        """Locate the source-checkout root that should host the cache.
+
+        Returns None when this module is running from an installed copy
+        (site-packages / .venv) rather than a source checkout.
+        """
+        root = Path(__file__).resolve().parents[2]
+        lowered = {part.lower() for part in root.parts}
+        if {"site-packages", "dist-packages"} & lowered:
+            return None
+        if ".venv" in lowered:
+            return None
+        return root
+
+    @staticmethod
+    def _migrate_legacy_home_cache(cache_dir: Path) -> None:
+        """One-time migration of caches from ~/.music_visualizer/cache.
+
+        Moves existing cache files into the project-local cache dir so
+        already-analyzed tracks keep loading instantly after the
+        directory change. When the project already holds a cache with
+        the same key, the redundant legacy copy (e.g. re-created by a
+        still-running old instance) is removed to keep things tidy.
+        """
+        legacy_dir = Path.home() / ".music_visualizer" / "cache"
+        if not legacy_dir.is_dir() or legacy_dir == cache_dir:
+            return
+        for legacy_file in legacy_dir.glob(f"*{CACHE_EXT}"):
+            target = cache_dir / legacy_file.name
+            if target.exists():
+                try:
+                    legacy_file.unlink()
+                    print(f"[Settings] Removed duplicate legacy cache: {legacy_file.name}")
+                except OSError as exc:
+                    print(f"[Settings] Could not remove legacy cache {legacy_file.name}: {exc}")
+                continue
+            try:
+                shutil.move(str(legacy_file), str(target))
+                print(f"[Settings] Migrated feature cache: {legacy_file.name}")
+            except OSError as exc:
+                print(f"[Settings] Failed to migrate {legacy_file.name}: {exc}")
 
 # Global settings instance
 settings = Settings()

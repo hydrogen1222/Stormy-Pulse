@@ -713,7 +713,7 @@ class VisualizerRenderer(QWidget):
             r, g, b, _ = theme.get_color(role="foreground_primary", alpha=1.0)
             flash_alpha = int(effects.beat_flash * 54)
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Plus)
-            painter.fillRect(self.rect(), QColor(r, g, b, flash_alpha))
+            painter.fillRect(0, 0, int(width), int(height), QColor(r, g, b, flash_alpha))
             painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
     def _build_layout_metrics(
@@ -1177,8 +1177,6 @@ class VisualizerRenderer(QWidget):
         cue = lyrics.cues[anchor_index]
         lines = cue.lines[:2]
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(acc_r, acc_g, acc_b, int(alpha * 0.15)))
-        painter.drawRoundedRect(active_rect.adjusted(-rect.width() * 0.02, 0, 0, 0), active_rect.height() * 0.18, active_rect.height() * 0.18)
         painter.setBrush(QColor(acc_r, acc_g, acc_b, int(alpha * 0.82)))
         painter.drawRoundedRect(
             QRectF(active_bar_x, active_rect.top(), rect.width() * 0.012, active_rect.height()),
@@ -1264,12 +1262,8 @@ class VisualizerRenderer(QWidget):
         fog_color: QColor,
         opacity: float,
     ):
-        """Very restrained local fog to keep text readable without card panels."""
-        expanded = rect.adjusted(-rect.width() * 0.06, -rect.height() * 0.14, rect.width() * 0.06, rect.height() * 0.14)
-        grad = QRadialGradient(expanded.center(), max(expanded.width(), expanded.height()) * 0.68)
-        grad.setColorAt(0.0, QColor(fog_color.red(), fog_color.green(), fog_color.blue(), int(24 * opacity)))
-        grad.setColorAt(1.0, QColor(fog_color.red(), fog_color.green(), fog_color.blue(), 0))
-        painter.fillRect(expanded, grad)
+        """No-op to eliminate card tile seam artifacts, keeping text floating seamlessly."""
+        pass
 
     def _format_family_name(self, family: str) -> str:
         return family.replace("_", " ").upper()

@@ -59,6 +59,19 @@ def hex_to_rgb(hex_str: str) -> ColorRGB:
     hex_str = hex_str.lstrip("#")
     return tuple(int(hex_str[i : i + 2], 16) for i in (0, 2, 4))
 
+def blackbody_radiation_color(temp_k: float) -> ColorRGB:
+    """Convert Kelvin temperature (1000K-15000K) to RGB color along Planckian Locus."""
+    temp = _clamp(temp_k, 1000.0, 15000.0) / 100.0
+    if temp <= 66.0:
+        r = 255.0
+        g = _clamp(99.4708025861 * math.log(temp) - 161.1195681661, 0.0, 255.0)
+        b = 0.0 if temp <= 19.0 else _clamp(138.5177312231 * math.log(temp - 10.0) - 305.0447927307, 0.0, 255.0)
+    else:
+        r = _clamp(329.698727446 * ((temp - 60.0) ** -0.1332047592), 0.0, 255.0)
+        g = _clamp(288.1221695283 * ((temp - 60.0) ** -0.0755148492), 0.0, 255.0)
+        b = 255.0
+    return (int(r), int(g), int(b))
+
 SCIENTIFIC_PALETTE_BANKS: Dict[str, List[str]] = {
     # Deep Oceanic / Midnight (Premium Dark)
     "midnight_depth": ["#0F172A", "#1E293B", "#334155", "#0EA5E9", "#38BDF8"],

@@ -18,6 +18,7 @@ class RingLayer:
         self.bass_pulse = 0.0
         self.overall_pulse = 0.0
         self.broken_segments: List[int] = [0] * ring_count
+        self.phase_state = None
 
     def update(
         self,
@@ -32,9 +33,11 @@ class RingLayer:
         is_on_beat: bool,
         bpm: float,
         dt: float = 0.016,
+        phase_state = None,
     ):
-        """Update ring parameters with a punchy but controlled reactor response."""
+        """Update ring parameters with phase state tracking."""
         sf = dt * 60.0
+        self.phase_state = phase_state
 
         self.bass_pulse += (bass * 5.8 - self.bass_pulse) * (0.30 if bass * 5.8 > self.bass_pulse else 0.11) * sf
         self.overall_pulse += (energy * 3.8 - self.overall_pulse) * (0.24 if energy * 3.8 > self.overall_pulse else 0.10) * sf
@@ -75,6 +78,7 @@ class RingLayer:
                 "thickness": self.ring_thickness[index],
                 "broken": self.broken_segments[index] > 0,
                 "rotation": self.rotation_angle,
+                "phase_state": self.phase_state,
             }
         return {
             "radius": 0,
@@ -82,6 +86,7 @@ class RingLayer:
             "thickness": 1.5,
             "broken": False,
             "rotation": 0,
+            "phase_state": None,
         }
 
     def trigger_beat_flash(self):

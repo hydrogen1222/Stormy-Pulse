@@ -11,6 +11,8 @@ from .effects import EffectState
 from .particles import ParticleSystem
 from .ring_layer import RingLayer
 from .energy_core import EnergyCore
+from .phase_engine import PhaseEngine
+from .pes_field import PESField
 
 DEBUG_EVENT_SYNC = False
 
@@ -22,6 +24,11 @@ class Scene:
         # Visual DNA
         self.theme: Optional[Theme] = None
         self.global_features: Optional[GlobalFeatureSet] = None
+
+        # Condensed Matter Physical Dynamics Engines
+        self.phase_engine = PhaseEngine()
+        self.pes_field = PESField()
+        self.phase_state = None
 
         # Visual elements
         self.effects = EffectState()
@@ -234,16 +241,39 @@ class Scene:
                     chaos, energy, type="dust"
                 )
 
-        # Update all visual elements
-        self.particles.update(center_x, center_y, chaos, self.effects.beat_flash, energy, dt)
+        # Update Condensed Matter Phase Engine & PES Field
+        self.phase_state = self.phase_engine.update(
+            rms=rms,
+            bass=bass,
+            mid=mid,
+            high=high,
+            onset_strength=onset,
+            flatness=flatness,
+            harmonic_e=getattr(frame, "harmonic_e", 0.5),
+            percussive_e=getattr(frame, "percussive_e", 0.5),
+            flux=getattr(frame, "flux", 0.0),
+            dt=dt,
+        )
+        self.pes_field.update(
+            chroma_vector=getattr(frame, "chroma_vector", None),
+            energy=energy,
+            flux=getattr(frame, "flux", 0.0),
+        )
+
+        # Update all visual elements with physical fields
+        base_radius = getattr(self.energy_core, "size", 200.0)
+        self.particles.update(
+            center_x, center_y, chaos, self.effects.beat_flash, energy, dt,
+            pes_field=self.pes_field, base_radius=base_radius
+        )
         
-        # Intelligent band distribution
+        # Intelligent band distribution & Phase State passing
         ring_cnt = self.ring_layer.ring_count
         bands = [bass] * (ring_cnt // 3) + [mid] * (ring_cnt // 3) + [high] * (ring_cnt - 2 * (ring_cnt // 3))
         self.ring_layer.update(
             bands, bass, mid, high, energy, chaos,
             self.effects.beat_flash, self.beat_strength, self.is_on_beat,
-            tempo, dt
+            tempo, dt, phase_state=self.phase_state
         )
 
         self.energy_core.update(rms, bass, energy, self.beat_strength, dt)

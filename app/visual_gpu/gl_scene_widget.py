@@ -55,6 +55,9 @@ class OpenGLSceneWidget(QOpenGLWidget):
         self.playback_position = position
         self.bridge.set_playback_position(position)
 
+    def reset_layout_cache(self):
+        self.bridge.reset_layout_cache()
+
     def reset(self):
         self.bridge.reset()
         self.scene = self.bridge.scene
@@ -70,14 +73,57 @@ class OpenGLSceneWidget(QOpenGLWidget):
         pass
 
     def resizeGL(self, width: int, height: int):
+        self.bridge.resize(width, height)
         self.bridge._layout_state = {}
+        # Repaint immediately at the new size so no stale framebuffer content
+        # can linger across the resize.
+        self.update()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        # Window-state changes (minimize/restore, maximize) can leave the GL
+        # widget showing a stale or partially composited frame; force a full
+        # repaint right after (re)exposure.
+        self.update()
 
     def paintGL(self):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+        # NOTE: the default QPainter mapping on a QOpenGLWidget already
+        # applies the device pixel ratio (logical coordinates); do NOT add
+        # viewport/window overrides here - they would double-apply the scale.
         self._render_scene_layers(painter, float(self.width()), float(self.height()), self.frame_dt)
         painter.end()
+
+    def check_framebuffer_size(self):
+        """Detect and recover from a stale GL framebuffer size.
+
+        On Windows, window-state changes (minimize/restore, maximize) racing
+        a resize can leave the QOpenGLWidget framebuffer at an older, smaller
+        size than the widget. The widget then shows the correctly laid-out
+        scene clipped at the old framebuffer width, with a pure-black block
+        covering the remaining area. Detect that mismatch and force Qt to
+        recreate the framebuffer via a 1px geometry nudge.
+        """
+        if not self.isVisible():
+            return
+        dpr = self.devicePixelRatioF()
+        expected_w = max(1, int(self.width() * dpr + 0.5))
+        expected_h = max(1, int(self.height() * dpr + 0.5))
+        image = self.grabFramebuffer()
+        if image.isNull():
+            return
+        if abs(image.width() - expected_w) <= 1 and abs(image.height() - expected_h) <= 1:
+            return
+        print(
+            f"[GL] framebuffer size mismatch: fbo={image.width()}x{image.height()} "
+            f"expected={expected_w}x{expected_h} -> forcing recreation"
+        )
+        geometry = self.geometry()
+        self.setGeometry(geometry.adjusted(0, 0, 1, 0))
+        self.setGeometry(geometry)
+        self.update()
 
     def _render_scene_layers(self, painter: QPainter, width: float, height: float, frame_dt: float):
         dt = max(frame_dt, 0.0)
