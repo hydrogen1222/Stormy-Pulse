@@ -145,23 +145,8 @@ def _render_segment_worker(
         renderer.set_target_fps(fps)
 
         try:
-            from app.dynamics.calibration import TrackCalibration
-            from app.dynamics.context import VisualContextBuilder, DynamicsBundle
-            from app.dynamics.trajectory import MaterialTrajectoryCompiler
-
-            calib = TrackCalibration.compute(
-                rms_arr=cache.frame_seq.features[:, cache.frame_seq.F_RMS],
-                flux_arr=cache.frame_seq.features[:, cache.frame_seq.F_FLUX],
-                onset_arr=cache.frame_seq.features[:, cache.frame_seq.F_ONSET_STR],
-            )
-            ctx_builder = VisualContextBuilder(cache, calib)
-            mat_traj = MaterialTrajectoryCompiler.compile(ctx_builder, cache.duration, simulation_hz=60.0)
-            bundle = DynamicsBundle(
-                calibration=calib,
-                context_builder=ctx_builder,
-                material_trajectory=mat_traj,
-                track_seed=abs(hash(track_path)) % 100000,
-            )
+            from app.dynamics.context import build_dynamics_bundle
+            bundle = build_dynamics_bundle(cache, simulation_hz=60.0)
             renderer.scene.set_dynamics_bundle(bundle)
         except Exception as err:
             print(f"[ExportWorker] Dynamics compile fallback: {err}")
@@ -284,23 +269,8 @@ class VideoExporter:
         renderer.set_target_fps(options.fps)
 
         try:
-            from app.dynamics.calibration import TrackCalibration
-            from app.dynamics.context import VisualContextBuilder, DynamicsBundle
-            from app.dynamics.trajectory import MaterialTrajectoryCompiler
-
-            calib = TrackCalibration.compute(
-                rms_arr=feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_RMS],
-                flux_arr=feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_FLUX],
-                onset_arr=feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_ONSET_STR],
-            )
-            ctx_builder = VisualContextBuilder(feature_cache, calib)
-            mat_traj = MaterialTrajectoryCompiler.compile(ctx_builder, feature_cache.duration, simulation_hz=60.0)
-            bundle = DynamicsBundle(
-                calibration=calib,
-                context_builder=ctx_builder,
-                material_trajectory=mat_traj,
-                track_seed=abs(hash(track.file_path)) % 100000,
-            )
+            from app.dynamics.context import build_dynamics_bundle
+            bundle = build_dynamics_bundle(feature_cache, simulation_hz=60.0)
             renderer.scene.set_dynamics_bundle(bundle)
         except Exception as err:
             print(f"[ExportSeq] Dynamics compile fallback: {err}")

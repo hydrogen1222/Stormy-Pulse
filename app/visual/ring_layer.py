@@ -34,15 +34,22 @@ class RingLayer:
         bpm: float,
         dt: float = 0.016,
         phase_state = None,
+        material = None,
+        geometry = None,
     ):
-        """Update ring parameters with phase state tracking."""
+        """Update ring parameters with MaterialState and GeometryControl tracking."""
         sf = dt * 60.0
         self.phase_state = phase_state
+        self.material = material
+        self.geometry = geometry
 
         self.bass_pulse += (bass * 5.8 - self.bass_pulse) * (0.30 if bass * 5.8 > self.bass_pulse else 0.11) * sf
         self.overall_pulse += (energy * 3.8 - self.overall_pulse) * (0.24 if energy * 3.8 > self.overall_pulse else 0.10) * sf
 
-        self.rotation_angle += (0.012 + bass * 0.06 + beat_strength * 0.09) * sf
+        rot_speed = 0.012 + bass * 0.06 + beat_strength * 0.09
+        if geometry is not None:
+            rot_speed *= (1.0 + 1.2 * geometry.circulation)
+        self.rotation_angle += rot_speed * sf
 
         # Update each ring
         for ring in range(self.ring_count):
@@ -79,6 +86,8 @@ class RingLayer:
                 "broken": self.broken_segments[index] > 0,
                 "rotation": self.rotation_angle,
                 "phase_state": self.phase_state,
+                "material": self.material,
+                "geometry": self.geometry,
             }
         return {
             "radius": 0,
@@ -87,6 +96,8 @@ class RingLayer:
             "broken": False,
             "rotation": 0,
             "phase_state": None,
+            "material": None,
+            "geometry": None,
         }
 
     def trigger_beat_flash(self):

@@ -4,6 +4,7 @@ Scene manager - coordinates all visual elements.
 from typing import Optional, List
 import math
 import random
+import numpy as np
 
 from ..analysis.features import FeatureFrame, GlobalFeatureSet
 from .themes import Theme, create_theme_from_features
@@ -89,18 +90,39 @@ class Scene:
 
     def seek_to(self, time: float):
         """Seek scene to exact timestamp with deterministic particle warmup."""
-        self.time = max(0.0, float(time))
+        target_time = max(0.0, float(time))
+        self.time = target_time
         self.effects = EffectState()
         self.particles.clear()
         self.last_onset_time = 0.0
         self.last_beat_time = 0.0
+        self.ring_layer = RingLayer(ring_count=self.ring_layer.ring_count)
+        self.energy_core = EnergyCore()
 
         if self.dynamics_bundle is not None:
-            mat = self.dynamics_bundle.material_trajectory.get_state_at_time(self.time)
-            ctx = self.dynamics_bundle.context_builder.at(self.time)
+            mat = self.dynamics_bundle.material_trajectory.get_state_at_time(target_time)
+            ctx = self.dynamics_bundle.context_builder.at(target_time)
             self.current_material_state = mat
             self.current_context = ctx
+            self.current_geometry_control = mat.geometry_control if mat is not None else None
             self.analytical_field.update(ctx, mat)
+
+            # Warmup short transient visual state over 2.0 seconds
+            warmup_start = max(0.0, target_time - 2.0)
+            if target_time > 0.0 and hasattr(self.dynamics_bundle.context_builder.cache, "get_frame_at_time"):
+                cache = self.dynamics_bundle.context_builder.cache
+                w_dt = 0.033
+                w_times = np.arange(warmup_start, target_time, w_dt)
+                for wt in w_times:
+                    frame = cache.get_frame_at_time(wt)
+                    if frame is not None:
+                        self.update(frame, is_playing=True, width=1920, height=1080, dt=w_dt)
+
+            # Re-confirm target state
+            self.time = target_time
+            self.current_material_state = mat
+            self.current_context = ctx
+            self.current_geometry_control = mat.geometry_control if mat is not None else None
 
     def load_track_features(self, global_features: GlobalFeatureSet):
         """Load global features and create theme."""
@@ -275,12 +297,15 @@ class Scene:
             pes_field=active_pes, base_radius=base_radius, material=active_material
         )
 
+        self.current_geometry_control = active_material.geometry_control if active_material is not None else None
+
         ring_cnt = self.ring_layer.ring_count
         bands = [bass] * (ring_cnt // 3) + [mid] * (ring_cnt // 3) + [high] * (ring_cnt - 2 * (ring_cnt // 3))
         self.ring_layer.update(
             bands, bass, mid, high, energy, chaos,
             self.effects.beat_flash, self.beat_strength, self.is_on_beat,
-            tempo, dt, phase_state=self.phase_state
+            tempo, dt, phase_state=self.phase_state,
+            material=active_material, geometry=self.current_geometry_control
         )
 
         self.energy_core.update(rms, bass, energy, self.beat_strength, dt)

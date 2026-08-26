@@ -1,6 +1,6 @@
 """
-Potential Energy Surface (PES) & Force Field Engine.
-Evaluates continuous potential energy fields V(r, θ, t) and analytical gradient forces -∇V.
+[DEPRECATED] Legacy PESField (pre-V2 fallback runtime only).
+Use AnalyticalPESField in app.dynamics.field for V2 runtime.
 """
 from __future__ import annotations
 

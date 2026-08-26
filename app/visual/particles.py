@@ -164,8 +164,9 @@ class ParticleSystem:
             else:
                 drag = 0.88 if p.is_spark else 0.94
 
-            p.vx *= (1.0 - (1.0 - drag) * sf)
-            p.vy *= (1.0 - (1.0 - drag) * sf)
+            drag_factor = max(0.01, min(0.999, drag)) ** sf
+            p.vx *= drag_factor
+            p.vy *= drag_factor
 
             p.x += p.vx * sf
             p.y += p.vy * sf

@@ -295,18 +295,35 @@ class FeatureCache:
         )
 
     def get_window_stats_at_time(self, time: float, window_size: int = 4) -> Dict[str, float]:
-        """Returns the rolling stats for the given time."""
-        idx = int(np.clip(time, 0, len(self.windows.times_1hz) - 1))
-        
+        """Returns linearly interpolated rolling stats for the given timestamp."""
+        if self.windows is None:
+            return {}
+
+        w_times = getattr(self.windows, "times_1hz", np.array([0.0]))
+        n_pts = len(w_times)
+        if n_pts == 0:
+            return {}
+
+        t_max = float(w_times[-1]) if n_pts > 0 else 0.0
+        t_clamped = max(0.0, min(t_max, float(time)))
+        i0 = int(np.floor(t_clamped))
+        i1 = min(n_pts - 1, i0 + 1)
+        u = float(t_clamped - i0)
+
         stats_dict = {}
-        if window_size == 2: source = self.windows.stats_2s
-        elif window_size == 8: source = self.windows.stats_8s
-        else: source = self.windows.stats_4s
-            
+        if window_size == 2:
+            source = self.windows.stats_2s
+        elif window_size == 8:
+            source = self.windows.stats_8s
+        else:
+            source = self.windows.stats_4s
+
         for k, v in source.items():
-            if idx < len(v):
-                stats_dict[k] = float(v[idx])
+            if len(v) > i0:
+                v0 = float(v[i0])
+                v1 = float(v[i1]) if i1 < len(v) else v0
+                stats_dict[k] = (1.0 - u) * v0 + u * v1
             else:
                 stats_dict[k] = 0.0
-                
+
         return stats_dict

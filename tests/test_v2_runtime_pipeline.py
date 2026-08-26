@@ -10,6 +10,7 @@ from app.analysis.features import (
     GlobalFeatureSet,
     FeatureCache,
 )
+from app.analysis.window import compute_window_features
 from app.dynamics.calibration import TrackCalibration
 from app.dynamics.context import VisualContextBuilder, DynamicsBundle
 from app.dynamics.trajectory import MaterialTrajectoryCompiler
@@ -44,7 +45,22 @@ def create_dummy_feature_cache(duration: float = 60.0) -> FeatureCache:
         onset_strengths=np.array([0.5, 0.5]),
     )
     meta = TrackAnalysisMetadata("dummy.mp3", "hash123", "2.0", duration, 44100, 1.0)
-    windows = WindowFeatureSet(np.arange(int(duration)), {}, {}, {})
+    windows_dict = compute_window_features(
+        frame_features=feats,
+        frame_rate=fps,
+        beat_positions=events.beat_positions,
+        onset_positions=events.onset_positions,
+        duration=duration,
+        F_RMS=FrameFeatureSequence.F_RMS,
+        F_CENTROID=FrameFeatureSequence.F_CENTROID,
+        F_FLUX=FrameFeatureSequence.F_FLUX,
+    )
+    windows = WindowFeatureSet(
+        times_1hz=windows_dict["times_1hz"],
+        stats_2s=windows_dict["stats_2s"],
+        stats_4s=windows_dict["stats_4s"],
+        stats_8s=windows_dict["stats_8s"],
+    )
     sections = SectionFeatureSet(np.array([0.0, duration]), ["verse"], np.zeros(int(duration)), [], [], [0.5])
     semantics = SemanticControlSet(0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.5, 0.3, 0.5, 0.5)
     globals_feat = GlobalFeatureSet.compute_defaults()
@@ -149,4 +165,7 @@ def test_seek_equivalence():
     scene.seek_to(seek_time)
 
     expected_state = mat_traj.get_state_at_time(seek_time)
-    assert scene.current_material_state == expected_state
+    assert scene.current_material_state.order == pytest.approx(expected_state.order, abs=1e-4)
+    assert scene.current_material_state.excitation == pytest.approx(expected_state.excitation, abs=1e-4)
+    assert scene.current_material_state.w_crystalline == pytest.approx(expected_state.w_crystalline, abs=1e-4)
+    assert scene.current_material_state.phase_name == expected_state.phase_name

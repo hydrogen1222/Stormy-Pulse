@@ -32,7 +32,7 @@ class TrackCalibration:
         eps = 1e-6
 
         # Convert RMS to dB relative to track max reference
-        valid_rms = rms_arr[~np.isnan(rms_arr)] if len(rms_arr) > 0 else np.array([1.0])
+        valid_rms = np.maximum(0.0, rms_arr[~np.isnan(rms_arr)]) if len(rms_arr) > 0 else np.array([1.0])
         max_rms = max(eps, float(np.max(valid_rms))) if len(valid_rms) > 0 else 1.0
         rms_db = 20.0 * np.log10((valid_rms + eps) / (max_rms + eps))
 

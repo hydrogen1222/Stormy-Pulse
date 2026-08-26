@@ -1,5 +1,5 @@
 """
-Condensed Matter Physical Phase Engine.
+[DEPRECATED] Legacy Phase Engine (pre-V2 fallback runtime only).
 Calculates real-time Order Parameters (η), Effective Temperature (T_eff),
 and Phase State Transitions (Crystalline -> Hydrodynamic Fluid -> Plasma).
 """

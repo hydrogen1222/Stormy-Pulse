@@ -518,26 +518,12 @@ class MainWindow(QWidget):
 
             # Compile V2 Dynamics Bundle
             try:
-                from app.dynamics.calibration import TrackCalibration
-                from app.dynamics.context import VisualContextBuilder, DynamicsBundle
-                from app.dynamics.trajectory import MaterialTrajectoryCompiler
-
-                calib = TrackCalibration.compute(
-                    rms_arr=features.frame_seq.features[:, features.frame_seq.F_RMS],
-                    flux_arr=features.frame_seq.features[:, features.frame_seq.F_FLUX],
-                    onset_arr=features.frame_seq.features[:, features.frame_seq.F_ONSET_STR],
-                )
-                ctx_builder = VisualContextBuilder(features, calib)
-                mat_traj = MaterialTrajectoryCompiler.compile(ctx_builder, features.duration, simulation_hz=60.0)
-                bundle = DynamicsBundle(
-                    calibration=calib,
-                    context_builder=ctx_builder,
-                    material_trajectory=mat_traj,
-                    track_seed=abs(hash(features.metadata.file_path)) % 100000,
-                )
+                from app.dynamics.context import build_dynamics_bundle
+                bundle = build_dynamics_bundle(features, simulation_hz=60.0)
                 self.visualizer.scene.set_dynamics_bundle(bundle)
-                print(f"[Dynamics V2] Attached MaterialTrajectory with {len(mat_traj.states)} 60Hz states.")
+                print(f"[Dynamics V2] Attached MaterialTrajectory with {len(bundle.material_trajectory.states)} 60Hz states.")
             except Exception as dyn_err:
+                print(f"[Dynamics V2 Compile Error] {dyn_err}")
                 print(f"[Dynamics V2 Compile Error] {dyn_err}")
 
             # This triggers theme creation

@@ -828,6 +828,12 @@ class VisualizerRenderer(QWidget):
             lobes = 4 + idx * 2 + int((centroid + rolloff) * 4)
             wave = safe_radius * (0.012 + band_value * 0.042 + onset * 0.020)
             wave2 = safe_radius * (0.007 + sparkle * 0.020 + tension * 0.012)
+
+            geom = getattr(self.scene, "current_geometry_control", None)
+            if geom is not None:
+                lobes = max(3, int(round(lobes * (0.6 + 0.8 * geom.symmetry))))
+                wave *= (0.7 + 0.6 * geom.coherence)
+                wave2 *= (0.8 + 0.8 * geom.roughness)
             point_count = 88 + idx * 20
             path = QPainterPath()
             for pidx in range(point_count + 1):

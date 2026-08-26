@@ -144,7 +144,6 @@ def compute_chroma(y: np.ndarray, sr: int, hop_length: int = 512) -> np.ndarray:
 
 
 def compute_spectral_contrast(S_mag: np.ndarray, sr: int) -> np.ndarray:
-    """Compute spectral contrast (difference between peaks and valleys)."""
+    """Compute spectral contrast 1D series over time (averaged across frequency bands)."""
     contrast = librosa.feature.spectral_contrast(S=S_mag, sr=sr)
-    # Average across frequency bands and time to get a global 'richness' metric
-    return np.mean(contrast, axis=1)
+    return np.mean(contrast, axis=0)

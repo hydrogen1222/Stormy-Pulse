@@ -115,21 +115,37 @@ class VisualContextBuilder:
         # Activity Gate
         activity = _clamp(energy_fast * 1.6 + onset_norm * 0.4, 0.0, 1.0)
 
-        # L3 Window Stats (Causal Trailing Windows)
-        energy_slow = energy_fast * 0.8
-        energy_trend = 0.0
-        transient_density = onset_norm * 0.8
-        if self.windows is not None and hasattr(self.windows, "stats_4s") and self.windows.stats_4s:
-            w_times = getattr(self.windows, "times_1hz", None)
-            if w_times is not None and len(w_times) > 0:
-                idx = int(np.clip(time, 0, len(w_times) - 1))
-                if "energy_mean" in self.windows.stats_4s:
-                    e_mean_4s = float(self.windows.stats_4s["energy_mean"][idx])
-                    energy_slow = self.calibration.normalize_rms_db(e_mean_4s)
-                if "energy_mean" in self.windows.stats_2s and "energy_mean" in self.windows.stats_8s:
-                    e2 = float(self.windows.stats_2s["energy_mean"][idx])
-                    e8 = float(self.windows.stats_8s["energy_mean"][idx])
-                    energy_trend = _clamp((e2 - e8) * 2.0, -1.0, 1.0)
+        # L3 Window Stats (Causal Trailing Windows via Interpolation)
+        stats4 = self.cache.get_window_stats_at_time(time, 4) if hasattr(self.cache, "get_window_stats_at_time") else {}
+        stats2 = self.cache.get_window_stats_at_time(time, 2) if hasattr(self.cache, "get_window_stats_at_time") else {}
+
+        if "energy_mean" in stats4:
+            energy_slow = self.calibration.normalize_rms_db(stats4["energy_mean"])
+        else:
+            energy_slow = energy_fast * 0.8
+
+        if "energy_trend" in stats4:
+            energy_trend = _clamp(stats4["energy_trend"] * 2.0, -1.0, 1.0)
+        else:
+            energy_trend = 0.0
+
+        if "transient_density" in stats4:
+            t_d2 = stats2.get("transient_density", stats4["transient_density"])
+            t_d4 = stats4["transient_density"]
+            transient_density = _clamp(0.6 * t_d2 + 0.4 * t_d4, 0.0, 1.0)
+        else:
+            transient_density = _clamp(onset_norm * 0.8, 0.0, 1.0)
+
+        # Rhythm Events
+        ev = self.events.get_events_near(time, window=0.08)
+        beat_impulse = ev["beat"]
+        beat_conf = getattr(self.events, "beat_confidence", 0.5) if len(self.events.beat_positions) >= 3 else 0.0
+
+        if "beat_density" in stats4:
+            b_d4 = stats4["beat_density"]
+            beat_density = _clamp(b_d4 * (0.5 + 0.5 * beat_conf), 0.0, 1.0)
+        else:
+            beat_density = _clamp(beat_impulse * beat_conf, 0.0, 1.0)
 
         # Spectrum
         bass_d = frame_dict["bass"]
@@ -139,11 +155,6 @@ class VisualContextBuilder:
         brightness = _clamp(frame_dict["centroid"], 0.0, 1.0)
         noise = _clamp(frame_dict["flatness"], 0.0, 1.0)
         tilt = _clamp(high_d / (bass_d + high_d + 1e-5), 0.0, 1.0)
-
-        # Rhythm Events
-        ev = self.events.get_events_near(time, window=0.08)
-        beat_impulse = ev["beat"]
-        beat_conf = getattr(self.events, "beat_confidence", 0.5) if len(self.events.beat_positions) >= 3 else 0.0
 
         # Tonal Structure
         harm_e = frame_dict["harmonic_e"]
@@ -163,7 +174,7 @@ class VisualContextBuilder:
         else:
             tonal_conf = 0.0
 
-        # L4 Section Boundaries & Real Section Progress
+        # L4 Section Boundaries & Real Causal Section Progress
         sec_progress = _clamp(time / max(1.0, duration), 0.0, 1.0)
         novelty_val = 0.0
         boundary_impulse = 0.0
@@ -176,9 +187,9 @@ class VisualContextBuilder:
             sec_end = float(bounds[sec_idx + 1]) if sec_idx + 1 < len(bounds) else duration
             sec_progress = _clamp((time - sec_start) / max(0.1, sec_end - sec_start), 0.0, 1.0)
 
-            # Nearest boundary impulse
-            min_dist = min(abs(time - sec_start), abs(time - sec_end))
-            boundary_impulse = float(math.exp(-min_dist / 0.35))
+            # Strictly causal boundary impulse (decays after boundary start)
+            elapsed = max(0.0, time - sec_start)
+            boundary_impulse = float(math.exp(-elapsed / 0.45))
 
             if hasattr(self.sections, "novelty_curve") and len(self.sections.novelty_curve) > 0:
                 n_idx = int(np.clip(time * (len(self.sections.novelty_curve) / duration), 0, len(self.sections.novelty_curve) - 1))
@@ -204,7 +215,7 @@ class VisualContextBuilder:
             beat_impulse=beat_impulse,
             beat_confidence=beat_conf,
             transient_density=transient_density,
-            beat_density=beat_impulse * beat_conf,
+            beat_density=beat_density,
             harmonic_ratio=harm_ratio,
             tonal_confidence=tonal_conf,
             chroma=chroma,
@@ -213,3 +224,38 @@ class VisualContextBuilder:
             climax_prior=climax_prior,
             section_progress=sec_progress,
         )
+
+
+def build_dynamics_bundle(
+    feature_cache,
+    simulation_hz: float = 60.0,
+) -> DynamicsBundle:
+    """
+    Centralized factory for creating full-track DynamicsBundle.
+    Generates stable cross-process track_seed using BLAKE2b digest on metadata.file_hash.
+    """
+    import hashlib
+    from .trajectory import MaterialTrajectoryCompiler
+
+    file_hash = getattr(feature_cache.metadata, "file_hash", "default_hash")
+    digest = hashlib.blake2b(file_hash.encode("utf-8"), digest_size=8).digest()
+    track_seed = int.from_bytes(digest, "little")
+
+    rms_arr = feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_RMS]
+    flx_arr = feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_FLUX]
+    ons_arr = feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_ONSET_STR]
+
+    calibration = TrackCalibration.compute(rms_arr, flx_arr, ons_arr)
+    ctx_builder = VisualContextBuilder(feature_cache, calibration)
+    mat_traj = MaterialTrajectoryCompiler.compile(
+        ctx_builder,
+        feature_cache.duration,
+        simulation_hz=simulation_hz,
+    )
+
+    return DynamicsBundle(
+        calibration=calibration,
+        context_builder=ctx_builder,
+        material_trajectory=mat_traj,
+        track_seed=track_seed,
+    )

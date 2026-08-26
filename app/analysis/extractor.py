@@ -289,7 +289,20 @@ class FeatureExtractor:
         avg_centroid = np.mean(centroid)
         avg_flatness = np.mean(flatness)
         chaos = np.clip(np.std(onset_env) * 4 + np.std(flux) * 2, 0.1, 1.0)
-        global_contrast = np.mean(spectral_contrast_vec)
+        
+        # Spectral Contrast Normalization via P10/P95
+        if spectral_contrast_vec is not None and len(spectral_contrast_vec) > 0:
+            sc_arr = np.array(spectral_contrast_vec, dtype=float)
+            sc_valid = sc_arr[~np.isnan(sc_arr)]
+            if len(sc_valid) > 0:
+                c_low = float(np.percentile(sc_valid, 10))
+                c_high = max(c_low + 1e-6, float(np.percentile(sc_valid, 95)))
+                norm_contrast_vec = np.clip((sc_valid - c_low) / (c_high - c_low), 0.0, 1.0)
+                global_contrast = float(np.mean(norm_contrast_vec))
+            else:
+                global_contrast = 0.5
+        else:
+            global_contrast = 0.5
         
         # Spectral Balance
         b_mean = np.mean(bass)

@@ -78,18 +78,21 @@ class MaterialStateEngine:
 
         # 1. Excitation Dynamics (Fast attack, slow decay relaxation)
         exc_target = (
-            0.35 * ctx.energy_fast
-            + 0.25 * ctx.flux
-            + 0.20 * ctx.onset
-            + 0.20 * ctx.transient_density
+            0.25 * ctx.energy_fast
+            + 0.15 * ctx.energy_slow
+            + 0.20 * ctx.flux
+            + 0.18 * ctx.onset
+            + 0.17 * ctx.transient_density
+            + 0.05 * max(0.0, ctx.energy_trend)
         ) if not is_dormant else 0.0
 
         tau_exc = 0.12 if exc_target > self.excitation else 0.55
         alpha_exc = 1.0 - math.exp(-dt / tau_exc)
         self.excitation += (exc_target - self.excitation) * alpha_exc
 
-        # 2. Defect Creation & Healing Dynamics (Hysteresis & Path Dependence)
-        damage = 0.45 * ctx.onset + 0.35 * ctx.flux + 0.20 * self.excitation
+        # 2. Defect Creation & Healing Dynamics (Hysteresis & L4 Susceptibility)
+        susceptibility = 1.0 + 0.20 * ctx.novelty + 0.15 * ctx.boundary_impulse
+        damage = (0.40 * ctx.onset + 0.30 * ctx.flux + 0.30 * self.excitation) * susceptibility
         create_rate = 1.8
         heal_rate = 0.25
 
@@ -106,9 +109,9 @@ class MaterialStateEngine:
         alpha_order = 1.0 - math.exp(-dt / tau_order)
         self.order += (order_target - self.order) * alpha_order
 
-        # 4. Mobility Dynamics
+        # 4. Mobility Dynamics (Consumes beat_density & energy_slow)
         mob_target = _clamp(
-            0.4 * self.excitation + 0.35 * ctx.beat_density + 0.25 * self.defect_density,
+            0.35 * self.excitation + 0.35 * ctx.beat_density + 0.20 * self.defect_density + 0.10 * ctx.energy_slow,
             0.0, 1.0
         ) if not is_dormant else 0.0
         tau_mob = 0.30
