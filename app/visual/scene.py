@@ -131,8 +131,8 @@ class Scene:
         brightness = self.global_features.brightness if self.global_features else 0.5
         tempo = self.global_features.tempo if self.global_features else 120.0
 
-        centroid_norm = max(0.0, min(1.0, centroid / 7000.0))
-        rolloff_norm = max(0.0, min(1.0, rolloff / 14000.0))
+        centroid_norm = max(0.0, min(1.0, float(centroid)))
+        rolloff_norm = max(0.0, min(1.0, float(rolloff)))
         flatness_norm = max(0.0, min(1.0, flatness))
         sparkle_target = max(0.0, min(1.0, brightness * 0.58 + high * 0.42))
         pressure_target = max(0.0, min(1.0, bass * 0.58 + rms * 0.24 + beat_strength * 0.30))
@@ -254,9 +254,10 @@ class Scene:
             flux=getattr(frame, "flux", 0.0),
             dt=dt,
         )
+        local_energy = rms * 0.7 + bass * 0.3
         self.pes_field.update(
             chroma_vector=getattr(frame, "chroma_vector", None),
-            energy=energy,
+            energy=local_energy,
             flux=getattr(frame, "flux", 0.0),
         )
 
@@ -311,3 +312,6 @@ class Scene:
         self.effects = EffectState()
         self.ring_layer = RingLayer(ring_count=5)
         self.energy_core = EnergyCore()
+        self.phase_engine = PhaseEngine()
+        self.pes_field = PESField()
+        self.phase_state = None

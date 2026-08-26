@@ -39,11 +39,8 @@ def detect_beats(
     )
 
     if len(peaks) == 0:
-        # Fallback: return evenly spaced beats at ~120 BPM
-        duration = len(onset_envelope) * hop_length / sample_rate
-        beat_times = np.arange(0.5, duration, 0.5)  # 120 BPM
-        beat_strengths = np.ones(len(beat_times)) * 0.5
-        return beat_times, beat_strengths
+        # On detection failure, return empty arrays (confidence=0.0) without fabricating beats
+        return np.array([], dtype=float), np.array([], dtype=float)
 
     # Convert peak indices to time
     beat_times = peaks * hop_length / sample_rate
@@ -96,14 +93,8 @@ def estimate_tempo(beat_times: np.ndarray) -> float:
 
 
 def compute_beat_regularity(beat_times: np.ndarray) -> float:
-    """
-    Compute how regular the beats are (0-1).
-
-    Returns:
-        regularity: 0 = very irregular, 1 = very regular
-    """
     if len(beat_times) < 3:
-        return 0.5
+        return 0.0
 
     intervals = np.diff(beat_times)
 

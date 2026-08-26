@@ -58,14 +58,18 @@ class PhaseEngine:
         """Update order parameters and phase weights from continuous audio frame."""
         dt = max(0.001, float(dt))
 
+        # 0. Calculate Activity Gate
+        activity = _clamp(rms * 1.8 + bass * 0.6 + onset_strength * 0.6, 0.0, 1.0)
+        is_dormant = activity < 0.05
+
         # 1. Calculate instant Order Parameter (η)
         tot_energy = max(1e-5, harmonic_e + percussive_e)
         hpr = harmonic_e / tot_energy
-        instant_eta = _clamp(hpr * (1.0 - _clamp(flatness, 0.0, 0.9)), 0.0, 1.0)
+        instant_eta = _clamp(hpr * (1.0 - _clamp(flatness, 0.0, 0.9)), 0.0, 1.0) if not is_dormant else 0.6
 
         # 2. Calculate instant Effective Temperature (T_eff)
         energy_scale = rms * 0.45 + bass * 0.35 + onset_strength * 0.20
-        instant_temp = _clamp(energy_scale * (1.0 + flux * 1.5), 0.0, 2.0)
+        instant_temp = _clamp(energy_scale * (1.0 + flux * 1.5), 0.0, 2.0) if not is_dormant else 0.0
 
         # 3. Calculate instant Anisotropy (γ)
         low_band = max(1e-4, bass)
@@ -81,37 +85,38 @@ class PhaseEngine:
         self.order_param += (instant_eta - self.order_param) * alpha_e
         self.anisotropy += (instant_gamma - self.anisotropy) * alpha_g
 
-        # 5. Compute Raw Phase Distances & Weights
-        # Crystalline: High Order, Low Temp
-        crys_score = max(0.0, self.order_param * 1.5 - self.temp_eff * 0.8)
-        # Plasma: High Temp, Low Order
-        plas_score = max(0.0, self.temp_eff * 1.2 - self.order_param * 0.6)
-        # Hydrodynamic Fluid: Intermediate regime
-        fluid_score = max(0.2, 1.0 - abs(self.order_param - 0.5) - abs(self.temp_eff - 0.5))
+        if is_dormant:
+            self.w_crys += (0.80 - self.w_crys) * min(1.0, dt * 3.0)
+            self.w_fluid += (0.15 - self.w_fluid) * min(1.0, dt * 3.0)
+            self.w_plas += (0.05 - self.w_plas) * min(1.0, dt * 3.0)
+            phase_name = "dormant"
+        else:
+            # 5. Compute Raw Phase Distances & Weights
+            crys_score = max(0.0, self.order_param * 1.5 - self.temp_eff * 0.8)
+            plas_score = max(0.0, self.temp_eff * 1.2 - self.order_param * 0.6)
+            fluid_score = max(0.2, 1.0 - abs(self.order_param - 0.5) - abs(self.temp_eff - 0.5))
 
-        tot_score = max(1e-5, crys_score + fluid_score + plas_score)
-        t_crys = crys_score / tot_score
-        t_fluid = fluid_score / tot_score
-        t_plas = plas_score / tot_score
+            tot_score = max(1e-5, crys_score + fluid_score + plas_score)
+            t_crys = crys_score / tot_score
+            t_fluid = fluid_score / tot_score
+            t_plas = plas_score / tot_score
 
-        # 6. Smooth Phase Weight Transitions
-        w_speed = min(1.0, dt * 3.2)
-        self.w_crys += (t_crys - self.w_crys) * w_speed
-        self.w_fluid += (t_fluid - self.w_fluid) * w_speed
-        self.w_plas += (t_plas - self.w_plas) * w_speed
+            w_speed = min(1.0, dt * 3.2)
+            self.w_crys += (t_crys - self.w_crys) * w_speed
+            self.w_fluid += (t_fluid - self.w_fluid) * w_speed
+            self.w_plas += (t_plas - self.w_plas) * w_speed
+
+            if self.w_crys >= self.w_fluid and self.w_crys >= self.w_plas:
+                phase_name = "crystalline"
+            elif self.w_plas >= self.w_crys and self.w_plas >= self.w_fluid:
+                phase_name = "plasma"
+            else:
+                phase_name = "hydrodynamic"
 
         w_tot = max(1e-5, self.w_crys + self.w_fluid + self.w_plas)
         self.w_crys /= w_tot
         self.w_fluid /= w_tot
         self.w_plas /= w_tot
-
-        # Primary phase label
-        if self.w_crys >= self.w_fluid and self.w_crys >= self.w_plas:
-            phase_name = "crystalline"
-        elif self.w_plas >= self.w_crys and self.w_plas >= self.w_fluid:
-            phase_name = "plasma"
-        else:
-            phase_name = "hydrodynamic"
 
         return PhaseState(
             order_parameter=self.order_param,
