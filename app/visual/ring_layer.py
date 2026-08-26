@@ -33,6 +33,8 @@ class RingLayer:
         is_on_beat: bool,
         bpm: float,
         dt: float = 0.016,
+        time: float = 0.0,
+        track_seed: int = 42,
         phase_state = None,
         material = None,
         geometry = None,
@@ -48,8 +50,17 @@ class RingLayer:
 
         rot_speed = 0.012 + bass * 0.06 + beat_strength * 0.09
         if geometry is not None:
-            rot_speed *= (1.0 + 1.2 * geometry.circulation)
+            rot_speed *= (1.0 + 1.5 * geometry.circulation)
         self.rotation_angle += rot_speed * sf
+
+        fragmentation = geometry.fragmentation if geometry is not None else 0.0
+        defect_density = material.defect_density if material is not None else 0.0
+        coherence = geometry.coherence if geometry is not None else 0.5
+        symmetry = geometry.symmetry if geometry is not None else 0.5
+        roughness = geometry.roughness if geometry is not None else 0.0
+
+        # Deterministic damage epoch (updated every 0.25s)
+        damage_epoch = int(max(0.0, time) / 0.25)
 
         # Update each ring
         for ring in range(self.ring_count):
@@ -63,19 +74,34 @@ class RingLayer:
             band_val = bands[band_idx] if bands else 0.0
 
             base_radius = 0.21 + (ring * 0.078)
-             
             pulse = self.bass_pulse if ring < 2 else self.overall_pulse * 0.45
             target_radius = base_radius + band_val * 0.27 + pulse * 0.17 + beat_strength * 0.10
-             
+
+            # Apply roughness distortion
+            if roughness > 0.05:
+                target_radius += math.sin(time * 8.0 + ring * 1.5) * 0.015 * roughness
+
+            # Smooth radial interpolation with coherence coupling
+            adapt_speed = 0.17 * (0.5 + 0.5 * coherence)
             if target_radius > self.ring_radii[ring]:
-                self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * 0.17 * sf
+                self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * adapt_speed * sf
             else:
                 self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * 0.06 * sf
-             
-            self.ring_phases[ring] += (0.03 + band_val * 0.11 + energy * 0.02) * sf
-             
+
+            # Phase progression modulated by symmetry
+            phase_step = (0.03 + band_val * 0.11 + energy * 0.02) * (0.7 + 0.6 * symmetry)
+            self.ring_phases[ring] += phase_step * sf
+
             target_thickness = 1.1 + band_val * 7.2 + beat_strength * 10.0 + energy * 2.0
             self.ring_thickness[ring] += (target_thickness - self.ring_thickness[ring]) * 0.15 * sf
+
+            # Deterministic damage mask for broken segments
+            if fragmentation > 0.10 or defect_density > 0.15:
+                h_val = ((track_seed ^ (ring * 10007) ^ (damage_epoch * 31337)) & 0xFFFFFFFF) / 4294967295.0
+                damage_threshold = 0.88 - 0.45 * fragmentation - 0.35 * defect_density
+                self.broken_segments[ring] = 1 if h_val > damage_threshold else 0
+            else:
+                self.broken_segments[ring] = 0
 
     def get_ring_data(self, index: int) -> dict:
         if 0 <= index < len(self.ring_radii):

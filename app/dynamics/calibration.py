@@ -39,11 +39,14 @@ class TrackCalibration:
         rms_p10 = float(np.percentile(rms_db, 10)) if len(rms_db) > 0 else -40.0
         rms_p95 = float(np.percentile(rms_db, 95)) if len(rms_db) > 0 else 0.0
 
-        flx_p95 = max(eps, float(np.percentile(flux_arr[~np.isnan(flux_arr)], 95))) if len(flux_arr) > 0 else 1.0
-        ons_p95 = max(eps, float(np.percentile(onset_arr[~np.isnan(onset_arr)], 95))) if len(onset_arr) > 0 else 1.0
+        v_flux = flux_arr[np.isfinite(flux_arr)] if flux_arr is not None else np.array([])
+        flx_p95 = max(eps, float(np.percentile(v_flux, 95))) if len(v_flux) > 0 else 1.0
+
+        v_onset = onset_arr[np.isfinite(onset_arr)] if onset_arr is not None else np.array([])
+        ons_p95 = max(eps, float(np.percentile(v_onset, 95))) if len(v_onset) > 0 else 1.0
 
         if contrast_arr is not None and len(contrast_arr) > 0:
-            c_valid = contrast_arr[~np.isnan(contrast_arr)]
+            c_valid = contrast_arr[np.isfinite(contrast_arr)]
             c_low = float(np.percentile(c_valid, 10)) if len(c_valid) > 0 else 10.0
             c_high = max(c_low + eps, float(np.percentile(c_valid, 95))) if len(c_valid) > 0 else 35.0
         else:
@@ -62,13 +65,13 @@ class TrackCalibration:
     def normalize_rms_db(self, rms_val: float, max_rms: float | None = None) -> float:
         """Map raw RMS to [0, 1] via dB space P10/P95 scaling relative to rms_reference."""
         eps = 1e-6
-        if np.isnan(rms_val):
+        if np.isnan(rms_val) or float(rms_val) <= 1e-6 or self.rms_reference <= 1e-5:
             return 0.0
         ref_rms = max_rms if max_rms is not None else self.rms_reference
         rms_db = 20.0 * np.log10((max(0.0, float(rms_val)) + eps) / (max(eps, float(ref_rms)) + eps))
         range_db = self.rms_db_p95 - self.rms_db_p10
         if range_db < 1e-3 or np.isnan(rms_db):
-            return 0.5
+            return 0.0 if float(rms_val) <= 1e-5 else 0.5
         return float(np.clip((rms_db - self.rms_db_p10) / range_db, 0.0, 1.0))
 
     def normalize_flux(self, flux_val: float) -> float:

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 @dataclass
 class Particle:
-    """Represents a single particle."""
+    """Represents a single particle with stable ID."""
 
     x: float
     y: float
@@ -19,6 +19,7 @@ class Particle:
     life: float
     max_life: float
     hue: float
+    particle_id: int = 0
     is_spark: bool = False
     trail: List[Tuple[float, float]] = None
 
@@ -33,6 +34,12 @@ class ParticleSystem:
     def __init__(self, max_particles: int = 3000): 
         self.max_particles = max_particles
         self.particles: List[Particle] = []
+        self.next_particle_id = 0
+
+    def clear(self):
+        """Clear all active particles."""
+        self.particles.clear()
+        self.next_particle_id = 0
 
     def emit(
         self,
@@ -82,6 +89,8 @@ class ParticleSystem:
             size *= (1 + energy * 0.6)
             life *= (1 + chaos * 0.3)
 
+            pid = self.next_particle_id
+            self.next_particle_id += 1
             particle = Particle(
                 x=x,
                 y=y,
@@ -91,6 +100,7 @@ class ParticleSystem:
                 life=life,
                 max_life=life,
                 hue=hue,
+                particle_id=pid,
                 is_spark=(type == "spark"),
                 trail=[]
             )
@@ -114,6 +124,8 @@ class ParticleSystem:
             hue = hue_base + random.uniform(-10, 30)
             size = 1.4 + beat_strength * 5 + random.random() * 2.2
 
+            pid = self.next_particle_id
+            self.next_particle_id += 1
             particle = Particle(
                 x=x,
                 y=y,
@@ -123,6 +135,7 @@ class ParticleSystem:
                 life=life,
                 max_life=life,
                 hue=hue,
+                particle_id=pid,
                 is_spark=True,
                 trail=[]
             )
@@ -178,10 +191,6 @@ class ParticleSystem:
 
         for i in reversed(to_remove):
             self.particles.pop(i)
-
-    def clear(self):
-        """Clear all particles."""
-        self.particles.clear()
 
     def get_particles(self) -> List[Particle]:
         """Get all particles."""

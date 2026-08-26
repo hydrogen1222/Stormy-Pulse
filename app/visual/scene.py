@@ -88,9 +88,12 @@ class Scene:
         self.dynamics_bundle = bundle
         self.analytical_field = AnalyticalPESField()
 
-    def seek_to(self, time: float):
-        """Seek scene to exact timestamp with deterministic particle warmup."""
+    def seek_to(self, time: float, width: float | None = None, height: float | None = None):
+        """Seek scene to exact timestamp with non-recursive deterministic particle warmup."""
         target_time = max(0.0, float(time))
+        w_w = width if width is not None else getattr(self, "viewport_width", 1280.0)
+        w_h = height if height is not None else getattr(self, "viewport_height", 720.0)
+
         self.time = target_time
         self.effects = EffectState()
         self.particles.clear()
@@ -107,16 +110,19 @@ class Scene:
             self.current_geometry_control = mat.geometry_control if mat is not None else None
             self.analytical_field.update(ctx, mat)
 
-            # Warmup short transient visual state over 2.0 seconds
+            # Non-recursive warmup short transient visual state over 2.0 seconds
             warmup_start = max(0.0, target_time - 2.0)
             if target_time > 0.0 and hasattr(self.dynamics_bundle.context_builder.cache, "get_frame_at_time"):
                 cache = self.dynamics_bundle.context_builder.cache
                 w_dt = 0.033
                 w_times = np.arange(warmup_start, target_time, w_dt)
+
+                # Set initial warmup time before simulation step
+                self.time = warmup_start
                 for wt in w_times:
                     frame = cache.get_frame_at_time(wt)
                     if frame is not None:
-                        self.update(frame, is_playing=True, width=1920, height=1080, dt=w_dt)
+                        self._update_internal(frame, is_playing=True, width=w_w, height=w_h, dt=w_dt, detect_seek=False)
 
             # Re-confirm target state
             self.time = target_time
@@ -131,7 +137,21 @@ class Scene:
         self.ring_layer.ring_count = self.theme.ring_count
 
     def update(self, frame: FeatureFrame, is_playing: bool, width: float, height: float, dt: float = 0.016):
-        """Update the scene based on current audio features."""
+        """Public update interface for scene rendering."""
+        self._update_internal(frame, is_playing, width, height, dt, detect_seek=True)
+
+    def _update_internal(
+        self,
+        frame: FeatureFrame,
+        is_playing: bool,
+        width: float,
+        height: float,
+        dt: float = 0.016,
+        detect_seek: bool = True,
+    ):
+        """Internal scene update core with optional seek detection."""
+        self.viewport_width = float(width)
+        self.viewport_height = float(height)
         center_x = width / 2
         center_y = height / 2
         self.last_update_center = (center_x, center_y)
@@ -154,9 +174,9 @@ class Scene:
 
         self.current_frame = frame
 
-        # Handle seeking backwards
-        if frame.time < self.time:
-            self.seek_to(frame.time)
+        # Handle seeking backwards (disabled during warmup loops)
+        if detect_seek and frame.time < self.time - 0.5:
+            self.seek_to(frame.time, width=width, height=height)
 
         # Keep time perfectly synced to the audio feature frame time
         self.time = frame.time
@@ -301,10 +321,11 @@ class Scene:
 
         ring_cnt = self.ring_layer.ring_count
         bands = [bass] * (ring_cnt // 3) + [mid] * (ring_cnt // 3) + [high] * (ring_cnt - 2 * (ring_cnt // 3))
+        seed = self.dynamics_bundle.track_seed if self.dynamics_bundle is not None else 42
         self.ring_layer.update(
             bands, bass, mid, high, energy, chaos,
             self.effects.beat_flash, self.beat_strength, self.is_on_beat,
-            tempo, dt, phase_state=self.phase_state,
+            tempo, dt, time=self.time, track_seed=seed, phase_state=self.phase_state,
             material=active_material, geometry=self.current_geometry_control
         )
 

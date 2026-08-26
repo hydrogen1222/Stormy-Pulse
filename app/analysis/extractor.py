@@ -10,6 +10,8 @@ import logging
 import time
 import hashlib
 
+from ..config.constants import CACHE_VERSION
+
 from .features import (
     FeatureCache, TrackAnalysisMetadata, FrameFeatureSequence, 
     EventFeatureSet, WindowFeatureSet, SectionFeatureSet, 
@@ -210,7 +212,7 @@ class FeatureExtractor:
             metadata = TrackAnalysisMetadata(
                 file_path=file_path,
                 file_hash=file_hash,
-                cache_version="v4",
+                cache_version=CACHE_VERSION,
                 duration=duration,
                 sample_rate=sr,
                 analysis_timestamp=time.time()
