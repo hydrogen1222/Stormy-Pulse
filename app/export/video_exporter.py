@@ -241,6 +241,12 @@ def _render_segment_worker_impl(
     try:
         from PySide6.QtWidgets import QApplication
 
+        if use_gpu and sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+            # Prefer GLX-over-X for multi-process NVIDIA rendering: concurrent
+            # offscreen-EGL context creation segfaults inside
+            # libnvidia-glcore (driver 580.x) and kills the worker.
+            os.environ["QT_QPA_PLATFORM"] = "xcb"
+
         app = QApplication.instance() or QApplication([])
         cache = FeatureCacheManager().load(track_path)
         if cache is None:
@@ -565,10 +571,11 @@ class VideoExporter:
                     proc.start()
                     procs.append([proc, idx])
 
-                # Stagger startups: 24 simultaneous NVIDIA EGL/X11 initializations
-                # occasionally race and leave some workers without a GL context.
+                # Stagger startups: many simultaneous NVIDIA EGL/GLX context
+                # creations race inside the driver and can segfault workers.
                 for idx in range(len(frame_ranges)):
-                    spawn_segment(idx, startup_delay=min(0.4 * idx, 12.0))
+                    delay = (min(1.0 * idx, 30.0) if options.use_gpu_renderer else min(0.4 * idx, 12.0))
+                    spawn_segment(idx, startup_delay=delay)
 
                 def handle_failure(idx: int, reason: str):
                     if idx in done_segments:
@@ -585,7 +592,9 @@ class VideoExporter:
                             0,
                             f"分段 {idx + 1} 失败并自动重启（剩 {attempts_left[idx]} 次）: {reason}",
                         )
-                        spawn_segment(idx, startup_delay=2.0)
+                        # Spread retries so driver-level context creation
+                        # doesn't hit the same concurrency wave again.
+                        spawn_segment(idx, startup_delay=3.0 + 1.0 * (idx % 10))
                     else:
                         cancel_event.set()
                         raise VideoExportError(f"分段 {idx + 1} 重试后仍失败: {reason}")

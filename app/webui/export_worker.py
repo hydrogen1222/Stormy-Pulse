@@ -49,6 +49,11 @@ def run_gpu_export_worker(
 
     from app.config.settings import settings
 
+    # Same rationale as the segment workers: prefer GLX-over-X on Linux for
+    # stable multi-process NVIDIA rendering.
+    if sys.platform.startswith("linux") and os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     with settings.override(ui_overrides):
         try:
             from PySide6.QtWidgets import QApplication
