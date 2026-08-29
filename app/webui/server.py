@@ -61,6 +61,10 @@ _state: Dict[str, Any] = {
     "export": {"phase": "idle", "progress": 0, "message": "", "file": "", "error": ""},
 }
 
+# Rolling log of export progress messages (including transient failure/retry
+# notices that would otherwise be overwritten within a second).
+_EXPORT_HISTORY = None  # lazy deque, bounded below
+
 _PARAMS: Dict[str, Any] = {
     # canvas
     "aspect": "16:9",
@@ -175,8 +179,25 @@ def _set_state(**kwargs: Any) -> None:
         _state.update(kwargs)
 
 
+_PROGRESS_PREFIXES = ("并行渲染中", "正在渲染帧", "正在取消导出")
+
+
+def _record_export_message(msg: str) -> None:
+    import collections
+
+    global _EXPORT_HISTORY
+    if _EXPORT_HISTORY is None:
+        _EXPORT_HISTORY = collections.deque(maxlen=40)
+    _EXPORT_HISTORY.append(f"[{time.strftime('%H:%M:%S')}] {msg}")
+
+
 def _set_export_state(**kwargs: Any) -> None:
     with _state_lock:
+        msg = kwargs.get("message")
+        if msg and not str(msg).startswith(_PROGRESS_PREFIXES):
+            # Keep transient failure/retry/phase notices; periodic per-frame
+            # progress lines would drown them out within a second.
+            _record_export_message(str(msg))
         _state["export"].update(kwargs)
 
 
@@ -391,6 +412,7 @@ def api_state() -> Dict[str, Any]:
         snap = dict(_state)
         snap["export"] = dict(_state["export"])
         snap["params"] = dict(_PARAMS)
+        snap["export_history"] = list(_EXPORT_HISTORY) if _EXPORT_HISTORY else []
     # GIL-atomic flag reads; do NOT take the render lock here because the
     # state poller must stay responsive while a long export is running.
     snap["has_audio"] = bool(_session.track and _session.feature_cache)

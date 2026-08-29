@@ -244,6 +244,7 @@ def _render_segment_worker_impl(
         app = QApplication.instance() or QApplication([])
         cache = FeatureCacheManager().load(track_path)
         if cache is None:
+            print(f"[ExportWorker {worker_index}] cache load failed for {track_path}", flush=True)
             progress_queue.put(("error", worker_index, "未能在子进程中加载分析缓存"))
             return
 
@@ -335,6 +336,7 @@ def _render_segment_worker_impl(
                 proc.kill()
             progress_queue.put(("error", worker_index, str(exc)))
     except Exception as exc:
+        print(f"[ExportWorker {worker_index}] FAILED: {exc}", flush=True)
         progress_queue.put(("error", worker_index, str(exc)))
 
 
