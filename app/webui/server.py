@@ -673,6 +673,8 @@ def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
         audio_bitrate=str(body.get("audio_bitrate", "320k")),
         cpu_render_workers=int(body.get("cpu_render_workers", 4)),
         use_gpu_renderer=use_gpu_renderer,
+        # Many-worker GPU exports: skip the O(N^2) exact per-segment replay.
+        fast_segment_start=use_gpu_renderer,
     )
 
     cancel_event = threading.Event()

@@ -76,6 +76,10 @@ class VideoExportOptions:
     title_override: str = ""
     artist_override: str = ""
     lyrics_path: str = ""
+    # Skip the exact 0->segment_start simulation replay for parallel segments
+    # (O(N) replay per worker dominates many-worker exports). The segment then
+    # starts with a short in-place warm-up instead of full history.
+    fast_segment_start: bool = False
 
 
 def _write_image_to_stream(stream, image: QImage):
@@ -193,6 +197,7 @@ def _render_segment_worker(
     use_gpu: bool = False,
     segment_codec_args: Optional[list[str]] = None,
     startup_delay: float = 0.0,
+    fast_start: bool = False,
 ):
     """Entry point for spawned worker processes: apply UI overrides, then render."""
     if startup_delay > 0:
@@ -203,7 +208,7 @@ def _render_segment_worker(
             ffmpeg_path, track_path, title, artist, width, height, fps,
             start_frame, end_frame, duration, segment_path, worker_index,
             progress_queue, cancel_event, feature_overrides, lyrics_path, use_gpu,
-            segment_codec_args,
+            segment_codec_args, fast_start,
         )
 
 
@@ -226,6 +231,7 @@ def _render_segment_worker_impl(
     lyrics_path: str = "",
     use_gpu: bool = False,
     segment_codec_args: Optional[list[str]] = None,
+    fast_start: bool = False,
 ):
     """Render one contiguous segment into a temporary lossless file.
 
@@ -281,7 +287,17 @@ def _render_segment_worker_impl(
 
         try:
             start_time = max(0.0, start_frame * dt)
-            renderer.scene.rebuild_to_time(start_time, width=width, height=height, fps=fps)
+            if fast_start:
+                # O(1) anchor + a short warm-up: with many parallel workers the
+                # exact 0->start replay dominates total wall time (O(N^2) across
+                # workers). Transients (particles) start from a fresh state and
+                # fill within the first seconds of the segment.
+                renderer.scene.seek_interactive(start_time, width=width, height=height)
+                warmup_frame = cache.get_frame_at_time(start_time)
+                for _ in range(10):
+                    renderer.scene.update(warmup_frame, warmup_frame is not None, float(width), float(height), dt)
+            else:
+                renderer.scene.rebuild_to_time(start_time, width=width, height=height, fps=fps)
 
             for frame_index in range(start_frame, end_frame):
                 if cancel_event.is_set():
@@ -540,6 +556,7 @@ class VideoExporter:
                             options.use_gpu_renderer,
                             segment_codec_args,
                             startup_delay,
+                            options.fast_segment_start,
                         ),
                         daemon=True,
                     )
