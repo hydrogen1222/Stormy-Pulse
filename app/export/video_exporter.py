@@ -92,13 +92,40 @@ def _aspect_ratio_key(width: int, height: int) -> str:
     return ""
 
 
+def _segment_intermediate_args(options: VideoExportOptions, worker_threads: int) -> list[str]:
+    """Codec args for the parallel path's lossless-ish segment files.
+
+    When the final encode is NVIDIA/Intel hardware, segment encoding also goes
+    to the GPU engine: CPU x264 lossless at 4K was the dominant CPU load of the
+    whole pipeline (N workers x auto-threaded encoders oversubscribe every
+    core). Falls back to ultrafast CPU x264 with a per-worker thread cap so N
+    workers never oversubscribe the machine.
+    """
+    codec = options.video_codec
+    if codec in {"h264_nvenc", "hevc_nvenc", "av1_nvenc"}:
+        # p1 + low-latency tune: fastest possible NVENC pass; intermediate
+        # quality at 80M dwarfs the final encode's bitrate anyway.
+        return ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-b:v", "80M", "-bf", "0"]
+    if codec in {"h264_qsv", "hevc_qsv", "av1_qsv"}:
+        return ["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "80M", "-bf", "0"]
+    return [
+        "-c:v", "libx264",
+        "-preset", "ultrafast",
+        "-crf", "15",
+        "-threads", str(max(1, worker_threads)),
+    ]
+
+
 def _build_segment_ffmpeg_command(
     ffmpeg_path: str,
     output_path: str,
     width: int,
     height: int,
     fps: int,
+    codec_args: Optional[list[str]] = None,
 ) -> list[str]:
+    if codec_args is None:
+        codec_args = ["-c:v", _SEGMENT_INTERMEDIATE_CODEC, *_SEGMENT_INTERMEDIATE_ARGS]
     return [
         ffmpeg_path,
         "-y",
@@ -119,9 +146,7 @@ def _build_segment_ffmpeg_command(
         str(fps),
         "-i",
         "-",
-        "-c:v",
-        _SEGMENT_INTERMEDIATE_CODEC,
-        *_SEGMENT_INTERMEDIATE_ARGS,
+        *codec_args,
         "-pix_fmt",
         _SEGMENT_INTERMEDIATE_PIX_FMT,
         "-an",
@@ -166,6 +191,7 @@ def _render_segment_worker(
     feature_overrides: Optional[dict] = None,
     lyrics_path: str = "",
     use_gpu: bool = False,
+    segment_codec_args: Optional[list[str]] = None,
 ):
     """Entry point for spawned worker processes: apply UI overrides, then render."""
     with settings.override(ui_overrides):
@@ -173,6 +199,7 @@ def _render_segment_worker(
             ffmpeg_path, track_path, title, artist, width, height, fps,
             start_frame, end_frame, duration, segment_path, worker_index,
             progress_queue, cancel_event, feature_overrides, lyrics_path, use_gpu,
+            segment_codec_args,
         )
 
 
@@ -194,6 +221,7 @@ def _render_segment_worker_impl(
     feature_overrides: Optional[dict] = None,
     lyrics_path: str = "",
     use_gpu: bool = False,
+    segment_codec_args: Optional[list[str]] = None,
 ):
     """Render one contiguous segment into a temporary lossless file.
 
@@ -233,7 +261,9 @@ def _render_segment_worker_impl(
         renderer.set_track_info(title, artist, file_hash=f_hash)
         renderer.set_lyrics(_resolve_lyrics(track, lyrics_path))
 
-        ffmpeg_cmd = _build_segment_ffmpeg_command(ffmpeg_path, segment_path, width, height, fps)
+        ffmpeg_cmd = _build_segment_ffmpeg_command(
+            ffmpeg_path, segment_path, width, height, fps, segment_codec_args
+        )
         proc = subprocess.Popen(
             ffmpeg_cmd,
             stdin=subprocess.PIPE,
@@ -468,6 +498,10 @@ class VideoExporter:
         segment_outputs: dict[int, str] = {}
         processes = []
 
+        # Per-worker encoder thread cap so N workers never oversubscribe the CPU.
+        worker_threads = max(1, (os.cpu_count() or 8) // max(worker_count, 1))
+        segment_codec_args = _segment_intermediate_args(options, worker_threads)
+
         with tempfile.TemporaryDirectory(prefix="mv_export_") as temp_dir:
             try:
                 self._report(progress_callback, 0, f"启动 {worker_count} 个并行渲染进程")
@@ -494,6 +528,7 @@ class VideoExporter:
                             options.feature_overrides,
                             options.lyrics_path,
                             options.use_gpu_renderer,
+                            segment_codec_args,
                         ),
                         daemon=True,
                     )
