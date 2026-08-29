@@ -442,6 +442,9 @@ $("cancelExportBtn").addEventListener("click", async () => {
 });
 
 /* GPU rendering parallelizes too: each worker owns its own GL context. */
+$("e_workers").addEventListener("input", () => {
+  $("v_workers").textContent = $("e_workers").value;
+});
 $("e_gpu").addEventListener("change", () => {
   const gpu = $("e_gpu").checked;
   $("e_workers").title = gpu
