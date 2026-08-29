@@ -31,7 +31,22 @@ def run_gpu_export_worker(
     progress_queue,
     cancel_event,
 ) -> None:
-    """Entry point for the spawned GPU export process (pickled by reference)."""
+    """Entry point for the spawned GPU export process (pickled by reference).
+
+    Runs non-daemon so it may fan out into the exporter's own daemonic segment
+    workers; a SIGTERM handler converts parent-side terminate() into SystemExit
+    so multiprocessing's atexit hook reaps those daemonic children cleanly.
+    """
+    import signal
+
+    def _sigterm_handler(signum, frame):
+        raise SystemExit(0)
+
+    try:
+        signal.signal(signal.SIGTERM, _sigterm_handler)
+    except Exception:
+        pass  # not the main thread / unsupported platform
+
     from app.config.settings import settings
 
     with settings.override(ui_overrides):

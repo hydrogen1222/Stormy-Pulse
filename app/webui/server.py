@@ -298,7 +298,11 @@ def _run_gpu_export(
             progress_queue,
             child_cancel,
         ),
-        daemon=True,
+        # Non-daemon: this child fans out into N daemonic GPU segment workers,
+        # and daemonic processes are not allowed to have children. The finally
+        # block below terminates it explicitly, and its own daemonic children
+        # are cleaned up by multiprocessing's atexit hook when it exits.
+        daemon=False,
     )
     proc.start()
 
