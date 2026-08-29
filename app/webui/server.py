@@ -106,6 +106,7 @@ _analysis_thread: Optional[threading.Thread] = None
 _export_thread: Optional[threading.Thread] = None
 _export_cancel: Optional[threading.Event] = None
 _gpu_render_probe: Optional[bool] = None
+_gpu_probe_detail: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -696,21 +697,26 @@ def api_export_cancel() -> Dict[str, Any]:
     return {"cancelling": False}
 
 
-def _probe_gpu_render() -> bool:
+def _probe_gpu_render() -> "tuple[bool, str]":
     """Probe OpenGL frame-render availability in an isolated child process.
 
     Creating a GL context can hard-crash on machines without proper drivers;
     a subprocess probe keeps the server alive to report "unavailable".
+    Returns (ok, detail) where detail explains the failure for the UI.
     """
     code = (
-        "import sys;"
-        "from PySide6.QtWidgets import QApplication;"
-        "from app.visual_gpu import VisualizerViewport;"
-        "app = QApplication.instance() or QApplication([]);"
-        "v = VisualizerViewport();"
-        "img = v.render_to_image(64, 64, 0.016);"
-        "assert not img.isNull();"
-        "print('GPU_OK')"
+        "import sys, traceback\n"
+        "from PySide6.QtWidgets import QApplication\n"
+        "from app.visual_gpu import VisualizerViewport\n"
+        "try:\n"
+        "    app = QApplication.instance() or QApplication([])\n"
+        "    v = VisualizerViewport()\n"
+        "    img = v.render_to_image(64, 64, 0.016)\n"
+        "    assert not img.isNull()\n"
+        "    print('GPU_OK')\n"
+        "except Exception:\n"
+        "    traceback.print_exc()\n"
+        "    sys.exit(3)\n"
     )
     try:
         proc = subprocess.run(
@@ -720,17 +726,40 @@ def _probe_gpu_render() -> bool:
             timeout=90,
             cwd=str(Path(__file__).resolve().parents[2]),
         )
-        return proc.returncode == 0 and "GPU_OK" in proc.stdout
-    except Exception:
-        return False
+    except Exception as exc:
+        return False, f"探测子进程未能运行: {exc}"
+
+    if proc.returncode == 0 and "GPU_OK" in proc.stdout:
+        return True, "GPU_OK"
+
+    detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+    # Keep the most informative tail lines (Qt plugin errors / tracebacks).
+    tail = " | ".join(line.strip() for line in detail[-4:] if line.strip())
+    if proc.returncode not in (0, 3) or "aborted" in tail.lower() or "core dumped" in tail.lower():
+        tail = tail or f"探测进程异常退出 (code={proc.returncode})"
+        return False, f"{tail} [exit={proc.returncode}]"
+    return False, tail or f"探测失败 (exit={proc.returncode})"
 
 
 @app.get("/api/gpu")
 def api_gpu() -> Dict[str, Any]:
-    global _gpu_render_probe
+    global _gpu_render_probe, _gpu_probe_detail
     if _gpu_render_probe is None:
-        _gpu_render_probe = _probe_gpu_render()
-    return {"gpu_render_available": _gpu_render_probe}
+        _gpu_render_probe, _gpu_probe_detail = _probe_gpu_render()
+    return {
+        "gpu_render_available": _gpu_render_probe,
+        "probe_detail": _gpu_probe_detail,
+    }
+
+
+def run_gpu_check() -> None:
+    """Standalone diagnostic: print GPU frame-render probe result to stdout."""
+    ok, detail = _probe_gpu_render()
+    if ok:
+        print("✅ GPU (OpenGL) 帧渲染可用")
+    else:
+        print("❌ GPU (OpenGL) 帧渲染不可用")
+        print(f"原因: {detail}")
 
 
 @app.get("/api/export/file")
@@ -770,7 +799,12 @@ def main():
     parser = argparse.ArgumentParser(description="Stormy-Pulse Music Visualizer WebUI Server")
     parser.add_argument("--host", type=str, default="0.0.0.0", help="Host to listen on (default: 0.0.0.0, all interfaces)")
     parser.add_argument("--port", type=int, default=7860, help="Port to listen on (default: 7860)")
+    parser.add_argument("--check-gpu", action="store_true", help="Probe OpenGL frame-render availability, print the reason, and exit")
     args = parser.parse_args()
+
+    if args.check_gpu:
+        run_gpu_check()
+        return
 
     import uvicorn
 

@@ -524,8 +524,12 @@ async function boot() {
       if (!g.gpu_render_available) {
         box.disabled = true;
         box.checked = false;
-        $("gpuRenderWrap").title = "未检测到可用的 OpenGL 环境，仅可使用 CPU 渲染";
+        const reason = g.probe_detail || "未检测到可用的 OpenGL 环境";
+        $("gpuRenderWrap").title = reason;
         $("gpuRenderWrap").style.opacity = ".5";
+        const hint = $("gpuHint");
+        hint.textContent = `GPU 渲染不可用：${reason}（服务器上可运行 uv run python -m app.webui --check-gpu 查看详情）`;
+        hint.classList.remove("hidden");
       }
     }).catch(() => { /* probe failure: keep default CPU path */ });
   } catch (e) { /* badges are cosmetic */ }
