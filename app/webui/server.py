@@ -783,7 +783,11 @@ def _probe_gpu_render() -> "tuple[bool, str]":
         if not (glob.glob("/usr/lib64/libnvidia-eglcore*") or glob.glob("/usr/lib/x86_64-linux-gnu/libnvidia-eglcore*")):
             hint = "；未找到 libnvidia-eglcore（NVIDIA 驱动可能缺少 OpenGL/EGL 组件）"
         elif nvidia_json:
-            hint = f"；已尝试 {nvidia_json} 仍失败，可尝试 sudo modprobe nvidia_drm modeset=1 后重试"
+            hint = (
+                "；NVIDIA EGL 的默认 Display 需要一个 X 服务器引导，"
+                "无显示器机器可启动无头 X 后以 DISPLAY=:0 运行："
+                "sudo Xorg :0 -sharevts -noreset（配置 AllowEmptyInitialConfiguration）"
+            )
         else:
             hint = "；未找到 glvnd NVIDIA 厂商注册文件（10_nvidia.json）"
     return False, f"{tail}{hint}"
