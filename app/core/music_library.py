@@ -19,6 +19,7 @@ class Track:
         self.file_path = file_path
         self.metadata = TrackMetadata(file_path)
         self.file_hash = self._compute_hash()
+        self.metadata.file_hash = self.file_hash
         self.cache_path: Optional[str] = None
         self.is_analyzed = False
         self.lyrics_path: Optional[str] = None

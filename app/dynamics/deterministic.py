@@ -7,6 +7,14 @@ from __future__ import annotations
 
 import hashlib
 import struct
+from typing import Optional
+
+
+def canonical_track_seed(file_hash: Optional[str]) -> int:
+    """Single authoritative source of truth for numerical track seed derived from file_hash."""
+    if not file_hash or file_hash in ("default", "default_hash", ""):
+        return 42
+    return deterministic_hash_uint64(0, str(file_hash), 0)
 
 
 def deterministic_hash_uint64(track_seed: int, stream_id: str, tick: int, event_idx: int = 0) -> int:

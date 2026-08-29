@@ -15,6 +15,14 @@ logger = logging.getLogger(__name__)
 
 def main():
     """Main entry point."""
+    # Check for WebUI flag
+    if "--web" in sys.argv or "--webui" in sys.argv:
+        # Remove --web flag from sys.argv so argparse in server.py doesn't complain
+        sys.argv = [arg for arg in sys.argv if arg not in ("--web", "--webui")]
+        from app.webui.server import main as webui_main
+        webui_main()
+        return
+
     logger.info("Starting Music Visualizer Player")
 
     # Add app directory to path for imports

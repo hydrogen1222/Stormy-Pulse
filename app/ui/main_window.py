@@ -66,6 +66,7 @@ class MainWindow(QWidget):
 
     def __init__(self):
         super().__init__()
+        self.setObjectName("mainWindow")
         self.setWindowTitle("音乐可视化播放器")
         self.setMinimumSize(1080, 720)
         self.setStyleSheet("background: #0a1320;")
@@ -105,7 +106,8 @@ class MainWindow(QWidget):
         target_fps = self.settings.get("fps", 60)
         interval = self._configure_update_timer(target_fps)
         self.visualizer.set_target_fps(target_fps)
-        
+        self._apply_app_theme_style(self.settings.get("app_theme", "dark"))
+
         print(f"[MainWindow] Update timer started ({interval}ms interval for {target_fps} FPS)")
 
     def _setup_ui(self):
@@ -297,7 +299,8 @@ class MainWindow(QWidget):
                 lyrics = current_track.load_lyrics()
 
             if hasattr(new_visualizer, "set_track_info"):
-                new_visualizer.set_track_info(title, artist)
+                f_hash = getattr(current_track, "file_hash", getattr(getattr(current_track, "metadata", None), "file_hash", "")) if current_track else ""
+                new_visualizer.set_track_info(title, artist, file_hash=f_hash)
             if hasattr(new_visualizer, "set_lyrics"):
                 new_visualizer.set_lyrics(lyrics)
             if hasattr(new_visualizer, "set_playback_position"):
@@ -423,14 +426,18 @@ class MainWindow(QWidget):
             self.visualizer.reset()
             
             # Set track info for HUD
+            title = self.settings.get("custom_track_title", "").strip() or track.metadata.title
+            artist = self.settings.get("custom_track_artist", "").strip() or track.metadata.artist
             if hasattr(self.visualizer, 'set_track_info'):
-                self.visualizer.set_track_info(track.metadata.title, track.metadata.artist)
+                f_hash = getattr(track.metadata, 'file_hash', '')
+                self.visualizer.set_track_info(title, artist, file_hash=f_hash)
             if hasattr(self.visualizer, "set_lyrics"):
                 self.visualizer.set_lyrics(track.load_lyrics())
 
             # Update UI info
-            self.title_label.setText(track.metadata.title)
-            self.artist_label.setText(f"{track.metadata.artist} - {track.metadata.album}")
+            self.title_label.setText(title)
+            album_info = f" - {track.metadata.album}" if track.metadata.album else ""
+            self.artist_label.setText(f"{artist}{album_info}")
             
             # Check cache explicitly for logging
             cache_path = self.visualization_sync.cache_manager.get_cache_path(track.metadata.file_path)
@@ -642,7 +649,8 @@ class MainWindow(QWidget):
             self.artist_label.setText(f"{new_artist} - {track.metadata.album}")
             
             if hasattr(self.visualizer, 'set_track_info'):
-                self.visualizer.set_track_info(new_title, new_artist)
+                f_hash = getattr(track, "file_hash", getattr(getattr(track, "metadata", None), "file_hash", ""))
+                self.visualizer.set_track_info(new_title, new_artist, file_hash=f_hash)
                 
             # Update playlist item (rough approach)
             self.playlist_panel.update_current_track_info(new_title, new_artist)
@@ -687,11 +695,15 @@ class MainWindow(QWidget):
             self._load_track(self.music_library.current_index)
 
     def _on_seek(self, position: float):
-        """Handle seek."""
+        """Handle seek with O(1) fast interactive seek."""
         print(f"[MainWindow] Seek to {position:.2f}s")
         self.audio_player.seek(int(position * 1000))
         self.visualization_sync.seek_to(position)
-        if hasattr(self.visualizer, "scene") and hasattr(self.visualizer.scene, "seek_to"):
+        if hasattr(self.visualizer, "seek_interactive"):
+            self.visualizer.seek_interactive(position)
+        elif hasattr(self.visualizer, "scene") and hasattr(self.visualizer.scene, "seek_interactive"):
+            self.visualizer.scene.seek_interactive(position)
+        elif hasattr(self.visualizer, "scene") and hasattr(self.visualizer.scene, "seek_to"):
             self.visualizer.scene.seek_to(position)
 
     def _on_volume_changed(self, volume: float):
@@ -728,6 +740,210 @@ class MainWindow(QWidget):
         self.player_controls.set_playing(False)
         self._on_next()
 
+    def _apply_app_theme_style(self, theme_name: str = "dark"):
+        """Apply high-contrast theme stylesheet for Dark / Light modes across all UI controls."""
+        if hasattr(self, "player_controls") and hasattr(self.player_controls, "set_theme"):
+            self.player_controls.set_theme(theme_name)
+        if hasattr(self, "playlist_panel") and hasattr(self.playlist_panel, "set_theme"):
+            self.playlist_panel.set_theme(theme_name)
+
+        is_light = (theme_name == "light")
+
+        if hasattr(self, "track_info"):
+            card_bg = "#ffffff" if is_light else "rgba(22, 22, 42, 180)"
+            card_border = "1px solid #cbd5e1" if is_light else "1px solid rgba(80, 80, 120, 100)"
+            self.track_info.setStyleSheet(f"""
+                #trackInfo {{
+                    background: {card_bg};
+                    border: {card_border};
+                    border-radius: 12px;
+                }}
+            """)
+
+        if hasattr(self, "cover_label"):
+            cover_bg = "#f1f5f9" if is_light else "#1a1a2e"
+            cover_fg = "#0f172a" if is_light else "#ffffff"
+            self.cover_label.setStyleSheet(f"""
+                background: {cover_bg};
+                color: {cover_fg};
+                border-radius: 4px;
+            """)
+
+        if hasattr(self, "title_label"):
+            self.title_label.setStyleSheet(f"color: {'#0f172a' if is_light else '#ffffff'};")
+
+        if hasattr(self, "artist_label"):
+            self.artist_label.setStyleSheet(f"color: {'#334155' if is_light else '#8888aa'};")
+
+        if hasattr(self, "status_label"):
+            self.status_label.setStyleSheet(f"color: {'#64748b' if is_light else '#666688'};")
+
+        if hasattr(self, "edit_btn"):
+            btn_bg = "#e2e8f0" if is_light else "#4a4a6a"
+            btn_fg = "#0f172a" if is_light else "#ffffff"
+            btn_border = "#cbd5e1" if is_light else "#7a7a9a"
+            hover_bg = "#cbd5e1" if is_light else "#5a5a8a"
+            self.edit_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {btn_bg};
+                    color: {btn_fg};
+                    border: 1px solid {btn_border};
+                    border-radius: 4px;
+                    font-family: "Microsoft YaHei";
+                    font-size: 12px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {hover_bg};
+                    border-color: #6366f1;
+                }}
+            """)
+
+        if hasattr(self, "lyrics_btn"):
+            lrc_bg = "#64748b" if is_light else "#304058"
+            lrc_fg = "#ffffff"
+            lrc_border = "#475569" if is_light else "#6680a8"
+            lrc_hover = "#475569" if is_light else "#3a5274"
+            self.lyrics_btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {lrc_bg};
+                    color: {lrc_fg};
+                    border: 1px solid {lrc_border};
+                    border-radius: 4px;
+                    font-family: "Microsoft YaHei";
+                    font-size: 12px;
+                    font-weight: bold;
+                }}
+                QPushButton:hover {{
+                    background-color: {lrc_hover};
+                    border-color: #6366f1;
+                }}
+            """)
+
+        if is_light:
+            self.setStyleSheet("""
+                QWidget#mainWindow {
+                    background-color: #f8fafc;
+                    color: #0f172a;
+                }
+                QMessageBox {
+                    background-color: #ffffff;
+                    color: #0f172a;
+                }
+                QMessageBox QLabel {
+                    color: #0f172a;
+                    font-size: 13px;
+                }
+                QMessageBox QPushButton {
+                    background-color: #e2e8f0;
+                    color: #0f172a;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 4px;
+                    padding: 4px 12px;
+                }
+                QScrollBar:vertical {
+                    background: #f1f5f9;
+                    width: 8px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #cbd5e1;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #94a3b8;
+                }
+            """)
+        else:
+            self.setStyleSheet("""
+                QWidget#mainWindow {
+                    background-color: #0b0d19;
+                    color: #f8fafc;
+                }
+                QMessageBox {
+                    background-color: #1e293b;
+                    color: #f8fafc;
+                }
+                QMessageBox QLabel {
+                    color: #f8fafc;
+                    font-size: 13px;
+                }
+                QMessageBox QPushButton {
+                    background-color: #334155;
+                    color: #f8fafc;
+                    border: 1px solid #475569;
+                    border-radius: 4px;
+                    padding: 4px 12px;
+                }
+                QScrollBar:vertical {
+                    background: #0f1123;
+                    width: 8px;
+                }
+                QScrollBar::handle:vertical {
+                    background: #2d314d;
+                    border-radius: 4px;
+                }
+                QScrollBar::handle:vertical:hover {
+                    background: #3f466e;
+                }
+            """)
+
+    def _apply_settings_values(self, new_values: dict):
+        self.settings.data.update(new_values)
+        self.settings.save()
+        new_fps = int(new_values.get("fps", 60))
+        self._configure_update_timer(new_fps)
+        if hasattr(self.visualizer, "set_target_fps"):
+            self.visualizer.set_target_fps(new_fps)
+
+        if "app_theme" in new_values:
+            self._apply_app_theme_style(new_values.get("app_theme", "dark"))
+        if "render_backend" in new_values:
+            self._set_render_backend(str(new_values["render_backend"]), persist=False)
+        current_track = self.music_library.get_current_track()
+        if current_track:
+            effective_title = str(new_values.get("custom_track_title", "")).strip() or current_track.metadata.title
+            effective_artist = str(new_values.get("custom_track_artist", "")).strip() or current_track.metadata.artist
+            self.title_label.setText(effective_title)
+            album_info = f" - {current_track.metadata.album}" if current_track.metadata.album else ""
+            self.artist_label.setText(f"{effective_artist}{album_info}")
+            if hasattr(self.visualizer, "set_track_info"):
+                f_hash = getattr(current_track, "file_hash", getattr(getattr(current_track, "metadata", None), "file_hash", ""))
+                self.visualizer.set_track_info(effective_title, effective_artist, file_hash=f_hash)
+
+        if new_values.get("show_lyrics", False) and current_track and hasattr(self.visualizer, "set_lyrics"):
+            self.visualizer.set_lyrics(current_track.load_lyrics())
+        if hasattr(self.visualizer, "reset_layout_cache"):
+            self.visualizer.reset_layout_cache()
+        self.visualizer.update()
+
+    def _restore_settings_snapshot(self, settings_snapshot: dict, backend_snapshot: str):
+        self.settings.data.clear()
+        self.settings.data.update(settings_snapshot)
+        self.settings.save()
+        restored_fps = int(self.settings.get("fps", 60))
+        self._configure_update_timer(restored_fps)
+        if hasattr(self.visualizer, "set_target_fps"):
+            self.visualizer.set_target_fps(restored_fps)
+
+        self._apply_app_theme_style(self.settings.get("app_theme", "dark"))
+        self._set_render_backend(backend_snapshot, persist=False)
+        current_track = self.music_library.get_current_track()
+        if current_track:
+            effective_title = str(self.settings.get("custom_track_title", "")).strip() or current_track.metadata.title
+            effective_artist = str(self.settings.get("custom_track_artist", "")).strip() or current_track.metadata.artist
+            self.title_label.setText(effective_title)
+            album_info = f" - {current_track.metadata.album}" if current_track.metadata.album else ""
+            self.artist_label.setText(f"{effective_artist}{album_info}")
+            if hasattr(self.visualizer, "set_track_info"):
+                f_hash = getattr(current_track, "file_hash", getattr(getattr(current_track, "metadata", None), "file_hash", ""))
+                self.visualizer.set_track_info(effective_title, effective_artist, file_hash=f_hash)
+
+        if self.settings.get("show_lyrics", False) and current_track and hasattr(self.visualizer, "set_lyrics"):
+            self.visualizer.set_lyrics(current_track.load_lyrics())
+        if hasattr(self.visualizer, "reset_layout_cache"):
+            self.visualizer.reset_layout_cache()
+        self.visualizer.update()
+
     def _on_settings_clicked(self):
         """Show clean, modular settings dialog."""
         from .settings_dialog import SettingsDialog
@@ -735,48 +951,22 @@ class MainWindow(QWidget):
         settings_snapshot = dict(self.settings.data)
         backend_snapshot = self._render_backend
 
-        def _apply_new_values(new_values: dict):
-            self.settings.data.update(new_values)
-            self.settings.save()
-            self._configure_update_timer(int(new_values["fps"]))
-            self.visualizer.set_target_fps(int(new_values["fps"]))
-            self._set_render_backend(str(new_values["render_backend"]), persist=False)
-            current_track = self.music_library.get_current_track()
-            if new_values["show_lyrics"] and current_track and hasattr(self.visualizer, "set_lyrics"):
-                self.visualizer.set_lyrics(current_track.load_lyrics())
-            if hasattr(self.visualizer, "reset_layout_cache"):
-                self.visualizer.reset_layout_cache()
-            self.visualizer.update()
-
-        def _restore_snapshot():
-            self.settings.data.clear()
-            self.settings.data.update(settings_snapshot)
-            self.settings.save()
-            self._configure_update_timer(int(self.settings.get("fps", 60)))
-            self._set_render_backend(backend_snapshot, persist=False)
-            current_track = self.music_library.get_current_track()
-            if self.settings.get("show_lyrics", False) and current_track and hasattr(self.visualizer, "set_lyrics"):
-                self.visualizer.set_lyrics(current_track.load_lyrics())
-            if hasattr(self.visualizer, "reset_layout_cache"):
-                self.visualizer.reset_layout_cache()
-            self.visualizer.update()
-
         dialog = SettingsDialog(
             self,
             self.settings.data,
             gpu_available=self._gpu_available,
             render_backend=self._render_backend,
-            on_live_update=_apply_new_values,
+            on_live_update=self._apply_settings_values,
         )
 
         if dialog.exec():
-            _apply_new_values(dialog.collect_settings())
+            self._apply_settings_values(dialog.collect_settings())
             print(
                 f"[MainWindow] Settings accepted: FPS={self.settings.get('fps')}, "
                 f"CanvasRatio={self.settings.get('visual_canvas_ratio')}, Render={self.settings.get('render_backend')}"
             )
         else:
-            _restore_snapshot()
+            self._restore_settings_snapshot(settings_snapshot, backend_snapshot)
 
     def _get_feature_cache_for_track(self, track, progress_dialog=None):
         """Get analysis cache for export, extracting if necessary."""
@@ -949,7 +1139,33 @@ class MainWindow(QWidget):
         worker_spin.setToolTip("0 为自动选择；手动指定更高进程数通常会提高 CPU 占用，但也会增加内存和中间文件开销。")
         video_form.addRow("渲染进程:", worker_spin)
 
+        use_gpu_cb = QCheckBox("使用 GPU 渲染每一帧 (OpenGL 硬件加速)")
+        gpu_initially_checked = (
+            self._gpu_available and (
+                self._render_backend.lower() == "gpu"
+                or codec_combo.currentText() in {"av1_amf", "h264_amf", "hevc_amf"}
+            )
+        )
+        use_gpu_cb.setChecked(gpu_initially_checked)
+        use_gpu_cb.setEnabled(self._gpu_available)
+        if not self._gpu_available:
+            use_gpu_cb.setToolTip("当前运行环境未检测到可用的 GPU/OpenGL 支持")
+        video_form.addRow("", use_gpu_cb)
+
+        def on_use_gpu_toggled(checked: bool):
+            if checked:
+                worker_spin.setEnabled(False)
+                worker_spin.setToolTip("GPU 帧渲染在主视口单线程执行，不使用 CPU 多进程分段。")
+            else:
+                worker_spin.setEnabled(True)
+                worker_spin.setToolTip("0 为自动选择；手动指定更高进程数通常会提高 CPU 占用，但也会增加内存和中间文件开销。")
+
+        use_gpu_cb.toggled.connect(on_use_gpu_toggled)
+        on_use_gpu_toggled(use_gpu_cb.isChecked())
+
         def update_codec_ui(codec_name: str):
+            if self._gpu_available and codec_name in {"av1_amf", "h264_amf", "hevc_amf"}:
+                use_gpu_cb.setChecked(True)
             preset_combo.blockSignals(True)
             preset_combo.clear()
             if codec_name in {"h264_amf", "hevc_amf"}:
@@ -1088,6 +1304,7 @@ class MainWindow(QWidget):
             if feature_cache is None:
                 raise VideoExportError("未能加载该歌曲的分析缓存。")
 
+            use_gpu = use_gpu_cb.isChecked() and self._gpu_available
             options = VideoExportOptions(
                 output_path=output_path,
                 width=width_spin.value(),
@@ -1103,12 +1320,24 @@ class MainWindow(QWidget):
                 audio_bitrate=audio_bitrate_edit.text().strip() or "320k",
                 extra_ffmpeg_args=extra_args_edit.text().strip(),
                 cpu_render_workers=worker_spin.value(),
+                use_gpu_renderer=use_gpu,
             )
+
+            if use_gpu and options.video_codec in {"av1_amf", "h264_amf", "hevc_amf"}:
+                pipeline_desc = f"GPU OpenGL 帧渲染 → D3D11 上传 → {options.video_codec.upper()} 硬件编码"
+            elif use_gpu:
+                pipeline_desc = f"GPU OpenGL 帧渲染 → {options.video_codec} 编码"
+            elif options.cpu_render_workers > 1 or (options.cpu_render_workers == 0 and os.cpu_count() and os.cpu_count() > 1):
+                pipeline_desc = f"CPU 多进程帧渲染 → {options.video_codec} 编码"
+            else:
+                pipeline_desc = f"CPU 单线程帧渲染 → {options.video_codec} 编码"
+
+            progress.setLabelText(f"准备导出 [{pipeline_desc}]...")
 
             exporter = VideoExporter()
 
             def on_export_progress(value: int, message: str):
-                progress.setLabelText(message)
+                progress.setLabelText(f"[{pipeline_desc}]\n{message}")
                 progress.setValue(value)
                 QApplication.processEvents()
 

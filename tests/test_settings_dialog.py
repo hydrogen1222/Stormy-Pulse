@@ -14,6 +14,25 @@ def qapp():
     yield app
 
 
+@pytest.fixture(autouse=True)
+def isolate_settings(tmp_path):
+    """Redirect settings file IO to pytest tmp_path and restore afterwards."""
+    orig_dir = settings.config_dir
+    orig_file = settings.config_file
+    orig_data = settings.data.copy()
+
+    settings.config_dir = tmp_path
+    settings.config_file = tmp_path / "settings.json"
+    settings.data = orig_data.copy()
+
+    try:
+        yield
+    finally:
+        settings.config_dir = orig_dir
+        settings.config_file = orig_file
+        settings.data = orig_data.copy()
+
+
 def test_settings_dialog_initialization(qapp):
     data = DEFAULT_SETTINGS.copy()
     dialog = SettingsDialog(None, data, gpu_available=True, render_backend="gpu")
@@ -76,3 +95,82 @@ def test_layout_cache_invalidation_and_scaling(qapp):
 
     # Clean up settings
     settings.set("layout_title_x", 0.0)
+
+
+def test_separate_title_artist_controls(qapp):
+    data = DEFAULT_SETTINGS.copy()
+    data["show_track_title"] = True
+    data["show_track_artist"] = True
+    data["custom_track_title"] = "My Custom Song"
+    data["custom_track_artist"] = "My Custom Singer"
+    data["font_scale_title"] = 1.2
+    data["font_scale_artist"] = 0.8
+    data["layout_title_x"] = 5.0
+    data["layout_artist_x"] = -5.0
+
+    dialog = SettingsDialog(None, data)
+    assert dialog.cb_top_title.isChecked() is True
+    assert dialog.cb_top_artist.isChecked() is True
+    assert dialog.custom_title_edit.text() == "My Custom Song"
+    assert dialog.custom_artist_edit.text() == "My Custom Singer"
+    assert dialog.title_scale_spin.value() == 1.2
+    assert dialog.artist_scale_spin.value() == 0.8
+    assert dialog.title_x_spin.value() == 5.0
+    assert dialog.artist_x_spin.value() == -5.0
+
+    dialog.artist_scale_spin.setValue(1.5)
+    dialog.cb_top_title.setChecked(False)
+    dialog.custom_title_edit.setText("Updated Title")
+
+    collected = dialog.collect_settings()
+    assert collected["show_track_title"] is False
+    assert collected["show_track_artist"] is True
+    assert collected["custom_track_title"] == "Updated Title"
+    assert collected["custom_track_artist"] == "My Custom Singer"
+    assert collected["font_scale_title"] == 1.2
+    assert collected["font_scale_artist"] == 1.5
+    assert collected["module_scale_artist"] == 1.5
+
+    # Test reset defaults
+    dialog._reset_layout_defaults()
+    assert dialog.title_scale_spin.value() == 1.0
+    assert dialog.artist_scale_spin.value() == 1.0
+    assert dialog.artist_x_spin.value() == 0.0
+    assert dialog.title_x_spin.value() == 0.0
+    assert dialog.custom_title_edit.text() == ""
+    assert dialog.custom_artist_edit.text() == ""
+
+    # Test VisualizerRenderer layout metrics: when only artist is shown, title_rect still has valid height
+    renderer = VisualizerRenderer()
+    renderer.resize(1280, 720)
+    renderer.set_track_info("Test Title", "Test Artist")
+
+    settings.set("show_track_title", False)
+    settings.set("show_track_artist", True)
+    renderer.reset_layout_cache()
+    metrics = renderer._get_layout_metrics(1280, 720, 1.0, True, True, True, False)
+    assert metrics["title_rect"].height() > 10.0, "title_rect must have valid height when show_track_artist=True"
+
+    # Both visible
+    settings.set("show_track_title", True)
+    settings.set("show_track_artist", True)
+    img_both = renderer.render_to_image(1280, 720, 0.016)
+    assert not img_both.isNull()
+
+    # Only title
+    settings.set("show_track_title", True)
+    settings.set("show_track_artist", False)
+    img_title = renderer.render_to_image(1280, 720, 0.016)
+    assert not img_title.isNull()
+
+    # Only artist
+    settings.set("show_track_title", False)
+    settings.set("show_track_artist", True)
+    img_artist = renderer.render_to_image(1280, 720, 0.016)
+    assert not img_artist.isNull()
+
+    # Neither
+    settings.set("show_track_title", False)
+    settings.set("show_track_artist", False)
+    img_none = renderer.render_to_image(1280, 720, 0.016)
+    assert not img_none.isNull()

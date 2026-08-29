@@ -14,6 +14,7 @@ class HudOverlayRenderer(VisualizerRenderer):
         super().__init__(parent)
         self.scene = scene
         self.frame_dt = 0.016
+        self._offscreen_overlay_cache: Optional[QImage] = None
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setStyleSheet("background: transparent; border: none;")
@@ -41,8 +42,25 @@ class HudOverlayRenderer(VisualizerRenderer):
         self._render_hud_only(painter, float(self.width()), float(self.height()), self.frame_dt)
         painter.end()
 
-    def render_overlay_to_image(self, width: int, height: int, frame_dt: float = 0.016):
-        image = QImage(width, height, QImage.Format.Format_RGBA8888)
+    def render_overlay_to_image(
+        self,
+        width: int,
+        height: int,
+        frame_dt: float = 0.016,
+        reuse_buffer: bool = False,
+    ) -> QImage:
+        if reuse_buffer:
+            if (
+                self._offscreen_overlay_cache is None
+                or self._offscreen_overlay_cache.width() != width
+                or self._offscreen_overlay_cache.height() != height
+                or self._offscreen_overlay_cache.format() != QImage.Format.Format_RGBA8888
+            ):
+                self._offscreen_overlay_cache = QImage(width, height, QImage.Format.Format_RGBA8888)
+            image = self._offscreen_overlay_cache
+        else:
+            image = QImage(width, height, QImage.Format.Format_RGBA8888)
+
         image.fill(0)
         painter = QPainter(image)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)

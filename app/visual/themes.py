@@ -3,7 +3,7 @@ Visual themes and styling.
 """
 import colorsys
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -73,27 +73,25 @@ def blackbody_radiation_color(temp_k: float) -> ColorRGB:
     return (int(r), int(g), int(b))
 
 SCIENTIFIC_PALETTE_BANKS: Dict[str, List[str]] = {
-    # Deep Oceanic / Midnight (Premium Dark)
-    "midnight_depth": ["#0F172A", "#1E293B", "#334155", "#0EA5E9", "#38BDF8"],
-    # Space Nebula (Rich Purple/Gold)
-    "space_nebula": ["#0F0A1F", "#2D1B4D", "#5B21B6", "#F59E0B", "#FCD34D"],
-    # Viridian Forest (Deep Green/Teal)
-    "viridian_edge": ["#064E3B", "#065F46", "#10B981", "#34D399", "#A7F3D0"],
-    # Rose Gold / Sunset (Elegant Warm)
-    "rose_sunset": ["#451A03", "#78350F", "#B45309", "#F59E0B", "#FB923C"],
-    # Arctic / Glass (Clean Minimalist)
-    "arctic_aura": ["#F8FAFC", "#F1F5F9", "#CBD5E1", "#94A3B8", "#64748B"],
-    # Royal Amethyst (Luxury Purple)
-    "royal_monarch": ["#2E1065", "#4C1D95", "#8B5CF6", "#A78BFA", "#DDD6FE"],
+    "amber_ignition": ["#1C1005", "#451A03", "#78350F", "#D97706", "#FDE68A"],
+    "royal_amethyst": ["#1A0B2E", "#2E1065", "#5B21B6", "#A78BFA", "#F3E8FF"],
+    "emerald_dusk": ["#022C22", "#064E3B", "#059669", "#34D399", "#A7F3D0"],
+    "rose_nebula": ["#2A0815", "#4C0519", "#9F1239", "#FB7185", "#FFE4E6"],
+    "obsidian_gold": ["#0C0A09", "#1C1917", "#44403C", "#D97706", "#FEF08A"],
+    "midnight_depth": ["#0B1329", "#0F172A", "#1E293B", "#0EA5E9", "#E0F2FE"],
+    "aurora_teal": ["#042F2E", "#0F766E", "#14B8A6", "#5EEAD4", "#E6FFFA"],
+    "cyberpunk_neon": ["#18181B", "#27272A", "#86198F", "#D946EF", "#38BDF8"],
 }
 
 SCIENTIFIC_FAMILY_ORDER = [
+    "amber_ignition",
+    "royal_amethyst",
+    "emerald_dusk",
+    "rose_nebula",
+    "obsidian_gold",
     "midnight_depth",
-    "space_nebula",
-    "viridian_edge",
-    "rose_sunset",
-    "royal_monarch",
-    "arctic_aura",
+    "aurora_teal",
+    "cyberpunk_neon",
 ]
 
 def interpolate_colors(c1: ColorRGB, c2: ColorRGB, t: float) -> ColorRGB:
@@ -144,12 +142,149 @@ def with_floor(color: ColorRGB, floor: int = 12, ceiling: int = 255) -> ColorRGB
 def lift_towards(color: ColorRGB, target: ColorRGB, amount: float) -> ColorRGB:
     return interpolate_colors(color, target, _clamp(amount, 0.0, 1.0))
 
+class DrawPlan:
+    """Deterministic layer composition recipe for distinct visual archetypes."""
+
+    def __init__(self, structure_type: str, seed: int):
+        self.structure_type = (structure_type or "pulse").lower()
+        self.seed = int(seed)
+
+        # Seed-based variation
+        self.polygon_sides = 5 + (self.seed % 4) # 5, 6, 7, 8 sides
+        self.arm_count = 4 + ((self.seed >> 2) % 4) # 4, 5, 6, 7 arms
+
+        self.show_optical_core = True
+        self.show_vortex_atmosphere = False
+        self.show_rings = True
+        self.show_angular_reactor = False
+        self.show_organic_membranes = False
+
+        self.core_shape = "circle"
+        self.ring_geometry_mode = "concentric"
+        self.particle_flow_mode = "radial"
+
+        if self.structure_type == "pulse":
+            self.show_optical_core = True
+            self.show_vortex_atmosphere = False
+            self.show_rings = True
+            self.core_shape = "circle"
+            self.ring_geometry_mode = "concentric"
+            self.particle_flow_mode = "radial"
+        elif self.structure_type == "vortex":
+            self.show_optical_core = False
+            self.show_vortex_atmosphere = True
+            self.show_rings = False
+            self.core_shape = "vortex_eye"
+            self.ring_geometry_mode = "spiral"
+            self.particle_flow_mode = "vortex_spiral"
+        elif self.structure_type == "reactor":
+            self.show_optical_core = False
+            self.show_vortex_atmosphere = False
+            self.show_angular_reactor = True
+            self.show_rings = False
+            self.core_shape = "polygon"
+            self.ring_geometry_mode = "orbital_polygon"
+            self.particle_flow_mode = "reactor_jets"
+        elif self.structure_type == "organic":
+            self.show_optical_core = False
+            self.show_vortex_atmosphere = False
+            self.show_organic_membranes = True
+            self.show_rings = False
+            self.core_shape = "asymmetric_cell"
+            self.ring_geometry_mode = "fluid_wave"
+            self.particle_flow_mode = "cellular_drift"
+
+    def active_layers(self) -> tuple[str, ...]:
+        """Return tuple of active layer names for layer set uniqueness testing."""
+        layers = []
+        if self.show_vortex_atmosphere:
+            layers.append("vortex_atmosphere")
+        else:
+            layers.append(f"atmosphere_{self.structure_type}")
+
+        if self.show_optical_core:
+            layers.append("optical_core")
+        else:
+            layers.append(f"core_{self.core_shape}")
+
+        if self.show_angular_reactor:
+            layers.append("angular_reactor_lattice")
+        elif self.show_organic_membranes:
+            layers.append("organic_membranes")
+
+        if self.show_rings:
+            layers.append(f"rings_{self.ring_geometry_mode}")
+
+        layers.append(f"particles_{self.particle_flow_mode}")
+        return tuple(layers)
+
+
+def relative_luminance(rgb: ColorRGB) -> float:
+    """Calculate WCAG relative luminance for an RGB tuple (0-255)."""
+    def adj(c):
+        cn = c / 255.0
+        return cn / 12.92 if cn <= 0.03928 else ((cn + 0.055) / 1.055) ** 2.4
+    return 0.2126 * adj(rgb[0]) + 0.7152 * adj(rgb[1]) + 0.0722 * adj(rgb[2])
+
+
+def contrast_ratio(c1: ColorRGB, c2: ColorRGB) -> float:
+    """Calculate WCAG contrast ratio between two RGB colors (>= 1.0)."""
+    l1 = relative_luminance(c1)
+    l2 = relative_luminance(c2)
+    return (max(l1, l2) + 0.05) / (min(l1, l2) + 0.05)
+
+
+def is_red_green_clash(primary: ColorRGB, secondary: ColorRGB, accent: ColorRGB) -> bool:
+    """Check if any pair among primary, secondary, and accent forms a high-sat red-green clash."""
+    def is_red(rgb):
+        h, s, _ = rgb_to_hsl(rgb)
+        return (h <= 25 or h >= 335) and s > 0.45
+
+    def is_green(rgb):
+        h, s, _ = rgb_to_hsl(rgb)
+        return (75 <= h <= 165) and s > 0.45
+
+    roles = [primary, secondary, accent]
+    has_red = any(is_red(c) for c in roles)
+    has_green = any(is_green(c) for c in roles)
+    return has_red and has_green
+
+
+def apply_color_clash_guard(
+    primary: ColorRGB,
+    secondary: ColorRGB,
+    accent: ColorRGB,
+    background_fog: ColorRGB,
+    hud_text: ColorRGB,
+) -> Tuple[ColorRGB, ColorRGB, ColorRGB, ColorRGB, ColorRGB]:
+    """Enforce harmony: no high-sat red+green clash, HUD text contrast >= 4.5:1."""
+    if is_red_green_clash(primary, secondary, accent):
+        # Shift secondary or accent green to cyan/emerald to harmonize
+        h_s, s_s, l_s = rgb_to_hsl(secondary)
+        if 75 <= h_s <= 165:
+            secondary = hsl_to_rgb(185.0, min(s_s, 0.45), l_s)
+
+        h_a, s_a, l_a = rgb_to_hsl(accent)
+        if 75 <= h_a <= 165:
+            accent = hsl_to_rgb(195.0, min(s_a, 0.55), l_a)
+
+        h_p, s_p, l_p = rgb_to_hsl(primary)
+        if 75 <= h_p <= 165:
+            primary = hsl_to_rgb(210.0, min(s_p, 0.45), l_p)
+
+    if contrast_ratio(hud_text, background_fog) < 4.5:
+        hud_text = (241, 245, 249)
+
+    return primary, secondary, accent, background_fog, hud_text
+
+
 class Theme:
     """Visual theme configuration representing a song's Visual DNA with Scientific Precision."""
 
-    def __init__(self, name: str, features: GlobalFeatureSet):
+    def __init__(self, name: str, features: GlobalFeatureSet, track_seed: int = 0):
         self.name = name
         self.features = features
+        self.track_seed = int(track_seed) if track_seed != 0 else int(features.theme_hue_base * 100)
 
         self.structure_type = features.structure_type
         self.detail_style = features.detail_style
@@ -163,7 +298,7 @@ class Theme:
         self.saturation = features.theme_saturation
         self.brightness = features.theme_brightness
         
-        # Refined Effect Multipliers (Elegant, not flashy)
+        # Refined Effect Multipliers
         self.ring_count = int(np.clip(features.ring_count + 1, 5, 8))
         self.line_thickness = features.line_thickness * 1.0
 
@@ -171,151 +306,44 @@ class Theme:
         self.show_particles = True
         self.show_beat_flash = True
 
+        self.draw_plan = DrawPlan(self.structure_type, self.track_seed)
+
         self.palette_blend_ratio = 0.0
         self.palette_blend_family = ""
         self.colors = self._generate_scientific_palette()
 
     def _generate_scientific_palette(self) -> Dict[str, ColorRGB]:
-        """Procedurally generate a large scientific-inspired palette space from hex seeds."""
+        """Generate single-family coordinated palette space without cross-family hue shifts."""
         f = self.features
-
-        chroma = np.asarray(getattr(f, "chroma_vector", np.ones(12) / 12.0), dtype=float)
-        if chroma.size != 12 or float(chroma.sum()) <= 1e-6:
-            chroma = np.ones(12, dtype=float) / 12.0
-        else:
-            chroma = chroma / float(chroma.sum())
-
-        chroma_peak = int(np.argmax(chroma))
-        chroma_center = float(np.dot(chroma, np.arange(12)))
         families = SCIENTIFIC_FAMILY_ORDER
 
-        family_pos = (
-            (f.theme_hue_base / 360.0) * len(families)
-            + f.energy * 1.6
-            + f.brightness * 1.1
-            + chroma_peak * 0.18
-        ) % len(families)
-        family_idx = int(family_pos) % len(families)
-        blend_idx = (family_idx + 1 + int(f.chaos * 2.0 + f.density * 1.6)) % len(families)
-        accent_idx = (blend_idx + 2 + int(f.high_ratio * 2.0 + f.warmth * 1.5)) % len(families)
-
+        family_idx = (self.track_seed + int(f.theme_hue_base / 45.0)) % len(families)
         primary_family = families[family_idx]
-        blend_family = families[blend_idx]
-        accent_family = families[accent_idx]
 
-        primary_pos = (
-            chroma_center * 0.21
-            + f.tempo / 57.0
-            + f.energy * 2.4
-            + f.bass_ratio * 1.8
-        )
-        secondary_pos = primary_pos + 0.9 + f.brightness * 2.1 + f.high_ratio * 0.8
-        accent_pos = primary_pos + 1.7 + f.chaos * 2.5 + f.warmth * 1.4
+        hex_tuple = SCIENTIFIC_PALETTE_BANKS[primary_family]
+        background_base = hex_to_rgb(hex_tuple[0])
+        background_fog = hex_to_rgb(hex_tuple[1])
+        background_halo = hex_to_rgb(hex_tuple[2])
+        primary_rgb = hex_to_rgb(hex_tuple[2])
+        secondary_rgb = hex_to_rgb(hex_tuple[3])
+        accent_rgb = hex_to_rgb(hex_tuple[4])
 
-        seed_primary = sample_palette_color(SCIENTIFIC_PALETTE_BANKS[primary_family], primary_pos)
-        seed_secondary = sample_palette_color(SCIENTIFIC_PALETTE_BANKS[blend_family], secondary_pos)
-        seed_accent = sample_palette_color(SCIENTIFIC_PALETTE_BANKS[accent_family], accent_pos)
+        grid_line = lift_towards(background_fog, secondary_rgb, 0.30)
+        grid_glow = lift_towards(background_halo, accent_rgb, 0.45)
+        hud_text = hex_to_rgb("#E2E8F0")
+        title_text = hex_to_rgb("#FFFFFF")
 
-        blend_t = _clamp(0.16 + f.energy * 0.28 + f.chaos * 0.20, 0.10, 0.62)
-        accent_t = _clamp(0.10 + f.brightness * 0.22 + f.high_ratio * 0.20, 0.08, 0.46)
-
-        # --- NEW COORDINATION LOGIC ---
-        # 1. Primary anchored to the strongest chroma/seed
-        primary_rgb = tune_color(
-            seed_primary,
-            hue_shift=(f.high_ratio - f.bass_ratio) * 15.0,
-            saturation_scale=1.1 + f.spectral_contrast * 0.2,
-            lightness_shift=0.02 + f.brightness * 0.05,
-        )
-
-        # 2. Secondary is Analogous (+30 to +60) - provides harmony
-        secondary_rgb = tune_color(
-            seed_secondary,
-            hue_shift=45.0 + f.energy * 15.0,
-            saturation_scale=0.85 + f.energy * 0.15,
-            lightness_shift=-0.05, # Darker than primary for depth
-        )
-
-        # 3. Accent is SPLIT-COMPLEMENTARY (+155) - provides interest and variety without clashing
-        accent_rgb = tune_color(
-            seed_accent,
-            hue_shift=155.0 + f.chaos * 20.0, 
-            saturation_scale=1.3 + f.energy * 0.2,
-            lightness_shift=0.08 + f.brightness * 0.08, # Pop out!
-        )
-
-        lab_navy = hex_to_rgb("#08111D")
-        lab_slate = hex_to_rgb("#132238")
-        bg_tint = tune_color(
-            mix_colors(
-                [primary_rgb, secondary_rgb, seed_secondary],
-                [0.62, 0.38, 0.22 + f.chaos * 0.16],
-            ),
-            hue_shift=-12.0 + (f.high_ratio - f.warmth) * 18.0,
-            saturation_scale=0.42 + f.energy * 0.12,
-            lightness_shift=-0.24 + f.brightness * 0.02,
-        )
-        background_base = with_floor(
-            mix_colors(
-                [lab_navy, lab_slate, bg_tint],
-                [1.0, 0.74, 0.42 + f.energy * 0.22],
-            ),
-            floor=10,
-            ceiling=78,
-        )
-        background_fog = with_floor(
-            tune_color(
-                mix_colors(
-                    [background_base, secondary_rgb, accent_rgb],
-                    [1.0, 0.38 + f.brightness * 0.18, 0.18 + f.high_ratio * 0.12],
-                ),
-                saturation_scale=0.84,
-                lightness_shift=0.08 + f.brightness * 0.03,
-            ),
-            floor=18,
-            ceiling=120,
-        )
-        background_halo = with_floor(
-            tune_color(
-                mix_colors(
-                    [primary_rgb, accent_rgb, secondary_rgb],
-                    [0.72, 0.60 + f.energy * 0.20, 0.20],
-                ),
-                saturation_scale=0.96 + f.energy * 0.08,
-                lightness_shift=-0.06 + f.brightness * 0.02,
-            ),
-            floor=28,
-            ceiling=168,
-        )
-
-        grid_line = with_floor(
-            lift_towards(background_fog, secondary_rgb, 0.26 + f.energy * 0.10),
-            floor=30,
-            ceiling=170,
-        )
-        grid_glow = with_floor(
-            lift_towards(background_halo, accent_rgb, 0.40 + f.high_ratio * 0.12),
-            floor=42,
-            ceiling=220,
-        )
-        hud_text = with_floor(
-            mix_colors([hex_to_rgb("#D6DFEA"), secondary_rgb], [1.0, 0.18]),
-            floor=170,
-            ceiling=244,
-        )
-        title_text = with_floor(
-            mix_colors([hex_to_rgb("#F6FAFF"), accent_rgb], [1.0, 0.12]),
-            floor=220,
-            ceiling=255,
+        primary_rgb, secondary_rgb, accent_rgb, background_fog, hud_text = apply_color_clash_guard(
+            primary_rgb, secondary_rgb, accent_rgb, background_fog, hud_text
         )
 
         colors = {
             "background_base": background_base,
             "background_fog": background_fog,
             "background_halo": background_halo,
-            "foreground_primary": with_floor(primary_rgb, floor=42, ceiling=235),
-            "foreground_secondary": with_floor(secondary_rgb, floor=40, ceiling=225),
-            "accent": with_floor(accent_rgb, floor=96, ceiling=255),
+            "foreground_primary": primary_rgb,
+            "foreground_secondary": secondary_rgb,
+            "accent": accent_rgb,
             "grid_line": grid_line,
             "grid_glow": grid_glow,
             "hud_text": hud_text,
@@ -323,14 +351,8 @@ class Theme:
         }
 
         self.palette_family = primary_family
-        self.palette_blend_family = blend_family
-        self.palette_blend_ratio = blend_t
-
-        print(
-            "[VisualDNA] Scientific Palette: "
-            f"{self.palette_family} + {self.palette_blend_family}({self.palette_blend_ratio:.2f}) "
-            f"| Primary={colors['foreground_primary']} Accent={colors['accent']}"
-        )
+        self.palette_blend_family = primary_family
+        self.palette_blend_ratio = 0.0
         return colors
 
     def get_color(self, role: str, alpha: float = 1.0) -> Tuple[int, int, int, int]:
@@ -349,8 +371,65 @@ class Theme:
     def __repr__(self):
         return f"VisualDNA({self.name}, hue={self.hue_base:.1f}, type={self.palette_type})"
 
-def create_theme_from_features(features: GlobalFeatureSet) -> Theme:
-    return Theme(name=f"dna_h{int(features.theme_hue_base)}", features=features)
+def create_theme_from_features(features: GlobalFeatureSet, track_seed: int = 0) -> Theme:
+    return Theme(name=f"dna_h{int(features.theme_hue_base)}", features=features, track_seed=track_seed)
 
 def get_theme(name: str) -> Theme:
+    """Legacy preset-name entry point. Themes are DNA-generated, so the name is
+    ignored and default features are used. Kept for backward compatibility."""
     return create_theme_from_features(GlobalFeatureSet.compute_defaults())
+
+
+def apply_dna_overrides(
+    features: GlobalFeatureSet,
+    overrides: Optional[dict] = None,
+    track_seed: int = 0,
+) -> GlobalFeatureSet:
+    """Return a copy of ``features`` with honest DNA overrides applied.
+
+    Supported override keys:
+      - structure:      "auto" | "pulse" | "vortex" | "reactor" | "organic"
+      - palette_family: "auto" | one of SCIENTIFIC_FAMILY_ORDER
+      - hue_shift:      degrees added on top of the (possibly family-forced) base hue
+      - energy / chaos / brightness: floats in [0, 1]
+
+    The palette family selection in Theme is ``(track_seed + int(hue/45)) % N``;
+    forcing a family solves for the hue that lands on the requested family.
+    """
+    from dataclasses import replace
+
+    if not overrides:
+        return features
+
+    updates: Dict[str, object] = {}
+
+    structure = str(overrides.get("structure") or "auto")
+    if structure != "auto":
+        updates["structure_type"] = structure
+        updates["structure_prior"] = structure
+
+    hue = float(features.theme_hue_base)
+    family = str(overrides.get("palette_family") or "auto")
+    if family != "auto" and family in SCIENTIFIC_FAMILY_ORDER:
+        # Forcing a family is authoritative; hue_shift is ignored in this mode
+        # because hue and family are coupled through the palette formula.
+        n = len(SCIENTIFIC_FAMILY_ORDER)
+        target = SCIENTIFIC_FAMILY_ORDER.index(family)
+        seed_mod = int(track_seed) % n
+        k = (target - seed_mod) % n
+        hue = 45.0 * k + 22.5
+    else:
+        hue_shift = float(overrides.get("hue_shift") or 0.0)
+        hue = (hue + hue_shift) % 360.0
+
+    if abs(hue - float(features.theme_hue_base)) > 1e-6:
+        updates["theme_hue_base"] = hue
+
+    for key in ("energy", "chaos", "brightness"):
+        value = overrides.get(key)
+        if value is not None:
+            updates[key] = _clamp(float(value), 0.0, 1.0)
+
+    if not updates:
+        return features
+    return replace(features, **updates)

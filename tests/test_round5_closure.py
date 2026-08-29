@@ -185,7 +185,7 @@ def test_cross_process_keyed_determinism():
 
 
 def test_scene_rebuild_to_time():
-    """Verify Scene.rebuild_to_time centralizes warmup deterministically."""
+    """Verify Scene.rebuild_to_time centralizes full-history replay deterministically."""
     scene = Scene()
-    scene.rebuild_to_time(time=1.5, width=1280, height=720, warmup_seconds=2.0)
+    scene.rebuild_to_time(time=1.5, width=1280, height=720)
     assert scene.time == 1.5

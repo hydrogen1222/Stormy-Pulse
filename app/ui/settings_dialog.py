@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSlider,
     QDoubleSpinBox,
+    QLineEdit,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -32,17 +33,6 @@ def _make_card_frame(title: str = "", subtitle: str = "") -> tuple[QFrame, QVBox
     """Create a styled visual card container for layout settings."""
     frame = QFrame()
     frame.setObjectName("settingsCard")
-    frame.setStyleSheet("""
-        QFrame#settingsCard {
-            background-color: #1a1b2e;
-            border: 1px solid #2d314d;
-            border-radius: 10px;
-            padding: 10px;
-        }
-        QFrame#settingsCard:hover {
-            border-color: #3f466e;
-        }
-    """)
     layout = QVBoxLayout(frame)
     layout.setContentsMargins(12, 10, 12, 12)
     layout.setSpacing(8)
@@ -51,11 +41,11 @@ def _make_card_frame(title: str = "", subtitle: str = "") -> tuple[QFrame, QVBox
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(0, 0, 0, 4)
         title_label = QLabel(title)
-        title_label.setStyleSheet("font_weight: bold; font-size: 13px; color: #7c8cff;")
+        title_label.setObjectName("cardTitle")
         header_layout.addWidget(title_label)
         if subtitle:
             sub_label = QLabel(subtitle)
-            sub_label.setStyleSheet("font-size: 11px; color: #727999;")
+            sub_label.setObjectName("cardSubtitle")
             header_layout.addWidget(sub_label)
         header_layout.addStretch()
         layout.addLayout(header_layout)
@@ -70,18 +60,6 @@ def _make_offset_spin(value: float) -> QDoubleSpinBox:
     spin.setDecimals(1)
     spin.setSuffix("%")
     spin.setValue(float(value))
-    spin.setStyleSheet("""
-        QDoubleSpinBox {
-            background: #121324;
-            color: #d1d7ff;
-            border: 1px solid #333859;
-            border-radius: 4px;
-            padding: 3px 6px;
-        }
-        QDoubleSpinBox:focus {
-            border-color: #5c6cff;
-        }
-    """)
     return spin
 
 
@@ -94,44 +72,14 @@ def _make_scale_controls(initial_val: float) -> tuple[QHBoxLayout, QSlider, QDou
     slider = QSlider(Qt.Orientation.Horizontal)
     slider.setRange(50, 200)
     slider.setValue(int(round(initial_val * 100)))
-    slider.setStyleSheet("""
-        QSlider::groove:horizontal {
-            height: 4px;
-            background: #252842;
-            border-radius: 2px;
-        }
-        QSlider::sub-page:horizontal {
-            background: #5c6cff;
-            border-radius: 2px;
-        }
-        QSlider::handle:horizontal {
-            background: #aab4ff;
-            width: 14px;
-            height: 14px;
-            margin: -5px 0;
-            border-radius: 7px;
-        }
-        QSlider::handle:horizontal:hover {
-            background: #ffffff;
-        }
-    """)
 
     spin = QDoubleSpinBox()
     spin.setRange(0.50, 2.00)
     spin.setSingleStep(0.05)
     spin.setDecimals(2)
     spin.setSuffix("x")
-    spin.setValue(initial_val)
+    spin.setValue(float(initial_val))
     spin.setFixedWidth(70)
-    spin.setStyleSheet("""
-        QDoubleSpinBox {
-            background: #121324;
-            color: #d1d7ff;
-            border: 1px solid #333859;
-            border-radius: 4px;
-            padding: 3px 4px;
-        }
-    """)
 
     updating = [False]
 
@@ -188,31 +136,6 @@ class SettingsDialog(QDialog):
 
         self.setWindowTitle("引擎与界面设置")
         self.resize(580, 560)
-        self.setStyleSheet("""
-            QDialog {
-                background: #121222;
-                color: #e1e4ff;
-                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
-            }
-            QLabel {
-                color: #c4caef;
-            }
-            QCheckBox {
-                color: #d8deff;
-                spacing: 6px;
-            }
-            QCheckBox::indicator {
-                width: 16px;
-                height: 16px;
-                border-radius: 4px;
-                border: 1px solid #424970;
-                background: #181a2e;
-            }
-            QCheckBox::indicator:checked {
-                background: #5c6cff;
-                border-color: #7c8cff;
-            }
-        """)
 
         self._init_ui()
 
@@ -223,32 +146,6 @@ class SettingsDialog(QDialog):
 
         # Tab Widget
         tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane {
-                border: 1px solid #292d47;
-                border-radius: 8px;
-                background: #151628;
-            }
-            QTabBar::tab {
-                background: #1a1c30;
-                color: #929bbd;
-                padding: 8px 18px;
-                font-size: 12px;
-                font-weight: bold;
-                border-top-left-radius: 6px;
-                border-top-right-radius: 6px;
-                margin-right: 2px;
-            }
-            QTabBar::tab:selected {
-                background: #272b4a;
-                color: #ffffff;
-                border-bottom: 2px solid #5c6cff;
-            }
-            QTabBar::tab:hover:!selected {
-                background: #21243d;
-                color: #c4caef;
-            }
-        """)
         main_layout.addWidget(tabs, 1)
 
         # Build Pages
@@ -260,29 +157,217 @@ class SettingsDialog(QDialog):
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确认保存")
         buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
-        buttons.setStyleSheet("""
-            QPushButton {
-                background-color: #272b4a;
-                color: #e1e4ff;
-                border: 1px solid #3c426e;
-                border-radius: 6px;
-                padding: 6px 16px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #353b66;
-                border-color: #5c6cff;
-            }
-            QPushButton:pressed {
-                background-color: #1e213b;
-            }
-        """)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         main_layout.addWidget(buttons)
 
         # Hook live updates
         self._hook_signals()
+
+        # Apply initial theme
+        self.set_theme(self.settings_data.get("app_theme", "dark"))
+
+    def set_theme(self, theme_name: str):
+        """Apply dynamic high-contrast theme stylesheet to dialog itself."""
+        self.is_light = (theme_name == "light")
+        dlg_bg = "#f8fafc" if self.is_light else "#0e101f"
+        dlg_fg = "#0f172a" if self.is_light else "#e1e4ff"
+        chk_fg = "#1e293b" if self.is_light else "#d8deff"
+        chk_bg = "#ffffff" if self.is_light else "#181a2e"
+        chk_border = "#cbd5e1" if self.is_light else "#424970"
+
+        pane_bg = "#ffffff" if self.is_light else "#151628"
+        pane_border = "#e2e8f0" if self.is_light else "#292d47"
+        tab_bg = "#f1f5f9" if self.is_light else "#1a1c30"
+        tab_fg = "#64748b" if self.is_light else "#929bbd"
+        tab_sel_bg = "#ffffff" if self.is_light else "#272b4a"
+        tab_sel_fg = "#0f172a" if self.is_light else "#ffffff"
+
+        card_bg = "#ffffff" if self.is_light else "#1a1b2e"
+        card_border = "#e2e8f0" if self.is_light else "#2d314d"
+        hover_border = "#cbd5e1" if self.is_light else "#3f466e"
+        title_color = "#4f46e5" if self.is_light else "#7c8cff"
+        sub_color = "#64748b" if self.is_light else "#727999"
+
+        spin_bg = "#f8fafc" if self.is_light else "#121324"
+        spin_fg = "#0f172a" if self.is_light else "#d1d7ff"
+        spin_border = "#cbd5e1" if self.is_light else "#333859"
+
+        groove_bg = "#e2e8f0" if self.is_light else "#252842"
+
+        btn_bg = "#cbd5e1" if self.is_light else "#23253d"
+        btn_fg = "#0f172a" if self.is_light else "#aeb8ff"
+        btn_hover = "#94a3b8" if self.is_light else "#2e3357"
+        btn_border = "#cbd5e1" if self.is_light else "#3c426e"
+
+        combo_bg = "#f8fafc" if self.is_light else "#121324"
+        combo_fg = "#0f172a" if self.is_light else "#d1d7ff"
+        combo_border = "#cbd5e1" if self.is_light else "#333859"
+        combo_drop_bg = "#ffffff" if self.is_light else "#181a2e"
+        combo_sel_bg = "#6366f1" if self.is_light else "#333859"
+
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {dlg_bg};
+                color: {dlg_fg};
+                font-family: "Segoe UI", "Microsoft YaHei UI", sans-serif;
+            }}
+            QLabel {{
+                color: {dlg_fg};
+            }}
+            QCheckBox {{
+                color: {chk_fg};
+                spacing: 6px;
+            }}
+            QCheckBox::indicator {{
+                width: 16px;
+                height: 16px;
+                border-radius: 4px;
+                border: 1px solid {chk_border};
+                background: {chk_bg};
+            }}
+            QCheckBox::indicator:checked {{
+                background: #6366f1;
+                border-color: #4f46e5;
+            }}
+
+            QTabWidget::pane {{
+                border: 1px solid {pane_border};
+                background: {pane_bg};
+                border-radius: 6px;
+            }}
+            QTabBar::tab {{
+                background: {tab_bg};
+                color: {tab_fg};
+                padding: 10px 20px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                margin-right: 4px;
+                font-weight: bold;
+                border: 1px solid {pane_border};
+                border-bottom: none;
+            }}
+            QTabBar::tab:selected {{
+                background: {tab_sel_bg};
+                color: {tab_sel_fg};
+                border-bottom: 2px solid #6366f1;
+            }}
+            QTabBar::tab:hover:!selected {{
+                background: {pane_border};
+            }}
+
+            QFrame#settingsCard {{
+                background-color: {card_bg};
+                border: 1px solid {card_border};
+                border-radius: 10px;
+                padding: 10px;
+            }}
+            QFrame#settingsCard:hover {{
+                border-color: {hover_border};
+            }}
+            QLabel#cardTitle {{
+                font-weight: bold;
+                font-size: 13px;
+                color: {title_color};
+            }}
+            QLabel#cardSubtitle {{
+                font-size: 11px;
+                color: {sub_color};
+            }}
+
+            QLineEdit, QDoubleSpinBox {{
+                background: {spin_bg};
+                color: {spin_fg};
+                border: 1px solid {spin_border};
+                border-radius: 4px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus, QDoubleSpinBox:focus {{
+                border-color: #6366f1;
+            }}
+
+            QSlider::groove:horizontal {{
+                height: 4px;
+                background: {groove_bg};
+                border-radius: 2px;
+            }}
+            QSlider::handle:horizontal {{
+                background: #6366f1;
+                width: 12px;
+                margin: -4px 0;
+                border-radius: 6px;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: #4f46e5;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: #6366f1;
+                border-radius: 2px;
+            }}
+
+            QPushButton {{
+                background-color: {btn_bg};
+                color: {btn_fg};
+                border: 1px solid {btn_border};
+                border-radius: 6px;
+                padding: 8px 14px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {btn_hover};
+                color: #ffffff;
+                border-color: #6366f1;
+            }}
+
+            QComboBox, QFontComboBox {{
+                background: {combo_bg};
+                color: {combo_fg};
+                border: 1px solid {combo_border};
+                border-radius: 6px;
+                padding: 5px 10px;
+                padding-right: 28px;
+                min-height: 22px;
+            }}
+            QComboBox:focus, QFontComboBox:focus {{
+                border-color: #6366f1;
+            }}
+            QComboBox::drop-down, QFontComboBox::drop-down {{
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+                width: 26px;
+                border-left: 1px solid {combo_border};
+                border-top-right-radius: 6px;
+                border-bottom-right-radius: 6px;
+                background-color: {tab_bg};
+            }}
+            QComboBox::drop-down:hover, QFontComboBox::drop-down:hover {{
+                background-color: {pane_border};
+            }}
+            QComboBox::down-arrow, QFontComboBox::down-arrow {{
+                width: 0;
+                height: 0;
+                border-left: 5px solid transparent;
+                border-right: 5px solid transparent;
+                border-top: 6px solid {combo_fg};
+            }}
+            QComboBox::down-arrow:hover, QFontComboBox::down-arrow:hover {{
+                border-top: 6px solid #6366f1;
+            }}
+            QComboBox QAbstractItemView, QFontComboBox QAbstractItemView {{
+                background-color: {combo_drop_bg};
+                color: {combo_fg};
+                selection-background-color: {combo_sel_bg};
+                selection-color: #ffffff;
+                border: 1px solid {combo_border};
+                border-radius: 6px;
+                padding: 4px;
+                outline: none;
+            }}
+            QComboBox QAbstractItemView::item, QFontComboBox QAbstractItemView::item {{
+                padding: 4px 8px;
+                min-height: 24px;
+            }}
+        """)
 
     def _build_basic_page(self) -> QWidget:
         page = QWidget()
@@ -295,7 +380,7 @@ class SettingsDialog(QDialog):
         form.setSpacing(12)
 
         self.fps_combo = QComboBox()
-        self.fps_combo.addItems(["60", "120", "144", "165", "No Limit"])
+        self.fps_combo.addItems(["30", "60", "120", "144", "165", "No Limit"])
         current_fps = self.settings_data.get("fps", 60)
         self.fps_combo.setCurrentText("No Limit" if current_fps == 0 else str(current_fps))
         form.addRow("目标渲染帧率:", self.fps_combo)
@@ -318,20 +403,12 @@ class SettingsDialog(QDialog):
         self.render_backend_combo.setCurrentIndex(1 if self.render_backend == "gpu" and self.gpu_available else 0)
         form.addRow("渲染引擎后端:", self.render_backend_combo)
 
-        combo_style = """
-            QComboBox {
-                background: #121324;
-                color: #d1d7ff;
-                border: 1px solid #333859;
-                border-radius: 4px;
-                padding: 4px 8px;
-            }
-            QComboBox:focus { border-color: #5c6cff; }
-            QComboBox::drop-down { border: none; }
-        """
-        self.fps_combo.setStyleSheet(combo_style)
-        self.canvas_ratio_combo.setStyleSheet(combo_style)
-        self.render_backend_combo.setStyleSheet(combo_style)
+        self.theme_combo = QComboBox()
+        self.theme_combo.addItem("深色模式 (Dark)", "dark")
+        self.theme_combo.addItem("浅色模式 (Light)", "light")
+        current_theme = self.settings_data.get("app_theme", "dark")
+        self.theme_combo.setCurrentIndex(1 if current_theme == "light" else 0)
+        form.addRow("界面外观主题:", self.theme_combo)
 
         card_layout.addLayout(form)
         layout.addWidget(card)
@@ -350,21 +427,49 @@ class SettingsDialog(QDialog):
         layout.setSpacing(12)
 
         # 1. Title Block Card
-        title_card, title_layout = _make_card_frame("🎴 歌曲标题与曲目信息", "控制顶部歌曲名/艺术家的显示与平移")
-        self.cb_top_title = QCheckBox("显示顶部歌曲标题")
+        title_card, title_layout = _make_card_frame("🎴 歌曲名称与艺术家", "分别控制顶部歌曲名称和艺术家的显示、大小缩放与位置微调")
+        title_toggles = QHBoxLayout()
+        self.cb_top_title = QCheckBox("显示歌曲名称")
         self.cb_top_title.setChecked(self.settings_data.get("show_track_title", True))
-        title_layout.addWidget(self.cb_top_title)
+        self.cb_top_artist = QCheckBox("显示艺术家")
+        self.cb_top_artist.setChecked(self.settings_data.get("show_track_artist", True))
+        title_toggles.addWidget(self.cb_top_title)
+        title_toggles.addWidget(self.cb_top_artist)
+        title_toggles.addStretch()
+        title_layout.addLayout(title_toggles)
 
         title_form = QFormLayout()
         title_form.setSpacing(8)
 
-        title_scale_val = self.settings_data.get("module_scale_title", 1.0)
+        self.custom_title_edit = QLineEdit()
+        self.custom_title_edit.setPlaceholderText("留空则自动读取歌曲元数据（默认）")
+        self.custom_title_edit.setText(self.settings_data.get("custom_track_title", ""))
+        title_form.addRow("自定义歌曲名:", self.custom_title_edit)
+
+        title_scale_val = self.settings_data.get("module_scale_title")
+        if title_scale_val is None or title_scale_val == 1.0:
+            title_scale_val = self.settings_data.get("font_scale_title", 1.0)
         title_scale_row, self.title_scale_slider, self.title_scale_spin = _make_scale_controls(title_scale_val)
-        title_form.addRow("标题整体缩放:", title_scale_row)
+        title_form.addRow("歌曲名称缩放:", title_scale_row)
 
         self.title_x_spin = _make_offset_spin(self.settings_data.get("layout_title_x", 0.0))
         self.title_y_spin = _make_offset_spin(self.settings_data.get("layout_title_y", 0.0))
-        title_form.addRow("位置偏移微调:", _pair_widget("X", self.title_x_spin, "Y", self.title_y_spin))
+        title_form.addRow("歌曲名称偏移:", _pair_widget("X", self.title_x_spin, "Y", self.title_y_spin))
+
+        self.custom_artist_edit = QLineEdit()
+        self.custom_artist_edit.setPlaceholderText("留空则自动读取歌曲元数据（默认）")
+        self.custom_artist_edit.setText(self.settings_data.get("custom_track_artist", ""))
+        title_form.addRow("自定义艺术家:", self.custom_artist_edit)
+
+        artist_scale_val = self.settings_data.get("module_scale_artist")
+        if artist_scale_val is None or artist_scale_val == 1.0:
+            artist_scale_val = self.settings_data.get("font_scale_artist", 1.0)
+        artist_scale_row, self.artist_scale_slider, self.artist_scale_spin = _make_scale_controls(artist_scale_val)
+        title_form.addRow("艺术家缩放:", artist_scale_row)
+
+        self.artist_x_spin = _make_offset_spin(self.settings_data.get("layout_artist_x", 0.0))
+        self.artist_y_spin = _make_offset_spin(self.settings_data.get("layout_artist_y", 0.0))
+        title_form.addRow("艺术家偏移:", _pair_widget("X", self.artist_x_spin, "Y", self.artist_y_spin))
 
         title_layout.addLayout(title_form)
         layout.addWidget(title_card)
@@ -436,25 +541,11 @@ class SettingsDialog(QDialog):
         layout.addWidget(effect_card)
 
         # Reset button
-        reset_btn = QPushButton("🔄 一键恢复默认排版与尺寸")
-        reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        reset_btn.setStyleSheet("""
-            QPushButton {
-                background-color: #23253d;
-                color: #aeb8ff;
-                border: 1px solid #3c426e;
-                border-radius: 6px;
-                padding: 8px 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #2e3357;
-                color: #ffffff;
-                border-color: #5c6cff;
-            }
-        """)
-        reset_btn.clicked.connect(self._reset_layout_defaults)
-        layout.addWidget(reset_btn)
+        self.reset_btn = QPushButton("🔄 一键恢复默认排版与尺寸")
+        self.reset_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.reset_btn.setObjectName("resetBtn")
+        self.reset_btn.clicked.connect(self._reset_layout_defaults)
+        layout.addWidget(self.reset_btn)
 
         scroll.setWidget(page)
         return scroll
@@ -465,7 +556,7 @@ class SettingsDialog(QDialog):
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(14)
 
-        card, card_layout = _make_card_frame("字体选择", "自定义歌曲名称与动态歌词的字体样式")
+        card, card_layout = _make_card_frame("字体选择 (下拉列表与即时字形预览)", "点击下拉箭头挑选系统已安装字体，或直接输入名称快速定位")
         form = QFormLayout()
         form.setSpacing(12)
 
@@ -497,20 +588,14 @@ class SettingsDialog(QDialog):
         )
         form.addRow("译文歌词字体:", self.lyric_translation_font_combo)
 
-        combo_style = """
-            QFontComboBox {
-                background: #121324;
-                color: #d1d7ff;
-                border: 1px solid #333859;
-                border-radius: 4px;
-                padding: 4px 8px;
-            }
-            QFontComboBox:focus { border-color: #5c6cff; }
-        """
-        self.title_font_combo.setStyleSheet(combo_style)
-        self.artist_font_combo.setStyleSheet(combo_style)
-        self.lyric_original_font_combo.setStyleSheet(combo_style)
-        self.lyric_translation_font_combo.setStyleSheet(combo_style)
+        for combo in (
+            self.title_font_combo,
+            self.artist_font_combo,
+            self.lyric_original_font_combo,
+            self.lyric_translation_font_combo,
+        ):
+            combo.setFontFilters(QFontComboBox.FontFilter.AllFonts)
+            combo.setMaxVisibleItems(16)
 
         card_layout.addLayout(form)
         layout.addWidget(card)
@@ -519,9 +604,14 @@ class SettingsDialog(QDialog):
 
     def _reset_layout_defaults(self):
         """Reset all scale and offset spinboxes to default 1.0 / 0.0."""
+        self.custom_title_edit.clear()
+        self.custom_artist_edit.clear()
+
         for spin in (
             self.title_x_spin,
             self.title_y_spin,
+            self.artist_x_spin,
+            self.artist_y_spin,
             self.lyrics_x_spin,
             self.lyrics_y_spin,
             self.left_hud_x_spin,
@@ -533,6 +623,7 @@ class SettingsDialog(QDialog):
 
         for spin in (
             self.title_scale_spin,
+            self.artist_scale_spin,
             self.lyrics_scale_spin,
             self.hud_scale_spin,
             self.effect_scale_spin,
@@ -549,13 +640,19 @@ class SettingsDialog(QDialog):
         selected_backend = self.render_backend_combo.currentData() or "cpu"
 
         hud_scale = float(self.hud_scale_spin.value())
+        title_scale = float(self.title_scale_spin.value())
+        artist_scale = float(self.artist_scale_spin.value())
 
         return {
             "fps": fps_val,
             "visual_canvas_ratio": self.canvas_ratio_combo.currentText(),
             "render_backend": selected_backend,
+            "app_theme": self.theme_combo.currentData() or "dark",
             "show_fps": self.cb_fps.isChecked(),
             "show_track_title": self.cb_top_title.isChecked(),
+            "show_track_artist": self.cb_top_artist.isChecked(),
+            "custom_track_title": self.custom_title_edit.text().strip(),
+            "custom_track_artist": self.custom_artist_edit.text().strip(),
             "show_left_hud": self.cb_left_hud.isChecked(),
             "show_right_hud": self.cb_right_hud.isChecked(),
             "show_lyrics": self.cb_lyrics.isChecked(),
@@ -567,21 +664,22 @@ class SettingsDialog(QDialog):
             "lyric_translation_font_family": self.lyric_translation_font_combo.currentFont().family(),
             "layout_title_x": float(self.title_x_spin.value()),
             "layout_title_y": float(self.title_y_spin.value()),
-            "layout_artist_x": float(self.title_x_spin.value()),
-            "layout_artist_y": float(self.title_y_spin.value()),
+            "layout_artist_x": float(self.artist_x_spin.value()),
+            "layout_artist_y": float(self.artist_y_spin.value()),
             "layout_lyrics_x": float(self.lyrics_x_spin.value()),
             "layout_lyrics_y": float(self.lyrics_y_spin.value()),
             "layout_left_hud_x": float(self.left_hud_x_spin.value()),
             "layout_left_hud_y": float(self.left_hud_y_spin.value()),
             "layout_right_hud_x": float(self.right_hud_x_spin.value()),
             "layout_right_hud_y": float(self.right_hud_y_spin.value()),
-            "font_scale_title": float(self.title_scale_spin.value()),
-            "font_scale_artist": float(self.title_scale_spin.value()),
+            "font_scale_title": title_scale,
+            "font_scale_artist": artist_scale,
             "font_scale_lyrics": float(self.lyrics_scale_spin.value()),
             "font_scale_hud": hud_scale,
             "font_scale_left_hud": hud_scale,
             "font_scale_right_hud": hud_scale,
-            "module_scale_title": float(self.title_scale_spin.value()),
+            "module_scale_title": title_scale,
+            "module_scale_artist": artist_scale,
             "module_scale_lyrics": float(self.lyrics_scale_spin.value()),
             "module_scale_left_hud": hud_scale,
             "module_scale_right_hud": hud_scale,
@@ -599,6 +697,7 @@ class SettingsDialog(QDialog):
         for cb in (
             self.cb_fps,
             self.cb_top_title,
+            self.cb_top_artist,
             self.cb_left_hud,
             self.cb_right_hud,
             self.cb_lyrics,
@@ -606,8 +705,18 @@ class SettingsDialog(QDialog):
         ):
             cb.toggled.connect(lambda _: _notify())
 
+        self.custom_title_edit.textChanged.connect(lambda _: _notify())
+        self.custom_artist_edit.textChanged.connect(lambda _: _notify())
+
         for combo in (self.fps_combo, self.canvas_ratio_combo, self.render_backend_combo):
             combo.currentIndexChanged.connect(lambda _: _notify())
+
+        def _on_theme_changed():
+            theme_val = self.theme_combo.currentData() or "dark"
+            self.set_theme(theme_val)
+            _notify()
+
+        self.theme_combo.currentIndexChanged.connect(lambda _: _on_theme_changed())
 
         for fcombo in (
             self.title_font_combo,
@@ -619,6 +728,7 @@ class SettingsDialog(QDialog):
 
         for slider in (
             self.title_scale_slider,
+            self.artist_scale_slider,
             self.lyrics_scale_slider,
             self.hud_scale_slider,
             self.effect_scale_slider,
@@ -627,11 +737,14 @@ class SettingsDialog(QDialog):
 
         for spin in (
             self.title_scale_spin,
+            self.artist_scale_spin,
             self.lyrics_scale_spin,
             self.hud_scale_spin,
             self.effect_scale_spin,
             self.title_x_spin,
             self.title_y_spin,
+            self.artist_x_spin,
+            self.artist_y_spin,
             self.lyrics_x_spin,
             self.lyrics_y_spin,
             self.left_hud_x_spin,
@@ -639,5 +752,4 @@ class SettingsDialog(QDialog):
             self.right_hud_x_spin,
             self.right_hud_y_spin,
         ):
-            spin.valueChanged.connect(lambda _: _notify())
             spin.valueChanged.connect(lambda _: _notify())

@@ -11,14 +11,16 @@ import shlex
 import subprocess
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Any, Callable, Dict, Optional
 
 from PySide6.QtGui import QImage
 
 from ..analysis.cache import FeatureCacheManager
 from ..analysis.features import FeatureCache
+from ..config.settings import settings
+from ..core.lyrics import parse_lrc_file
 from ..core.music_library import Track
 from ..visual.renderer import VisualizerRenderer
 
@@ -30,7 +32,14 @@ _SEGMENT_INTERMEDIATE_CODEC = "libx264"
 _SEGMENT_INTERMEDIATE_PIX_FMT = "yuv420p"  # x264 lossless is more stable with standard yuv420p
 _SEGMENT_INTERMEDIATE_ARGS = ["-preset", "ultrafast", "-crf", "0"]
 _RENDER_PROGRESS_WEIGHT = 88
-_PARALLEL_PREROLL_SECONDS = 5.0
+
+# Semantic quality names (WebUI) mapped onto codec-native x264/x265 presets.
+_QUALITY_PRESET_ALIASES = {
+    "high_quality": "veryslow",
+    "quality": "slow",
+    "balanced": "medium",
+    "speed": "faster",
+}
 
 
 class VideoExportError(RuntimeError):
@@ -59,6 +68,14 @@ class VideoExportOptions:
     audio_bitrate: str = "320k"
     extra_ffmpeg_args: str = ""
     cpu_render_workers: int = 0
+    use_gpu_renderer: bool = False
+    # Headless/WebUI surface overrides: applied around rendering without touching
+    # the persisted settings file, and propagated into parallel worker processes.
+    ui_overrides: Dict[str, Any] = field(default_factory=dict)
+    feature_overrides: Dict[str, Any] = field(default_factory=dict)
+    title_override: str = ""
+    artist_override: str = ""
+    lyrics_path: str = ""
 
 
 def _write_image_to_stream(stream, image: QImage):
@@ -112,6 +129,24 @@ def _build_segment_ffmpeg_command(
     ]
 
 
+def _resolve_lyrics(track: Track, lyrics_path: str = ""):
+    """Prefer an explicit lyrics override (WebUI upload), else the adjacent .lrc file."""
+    if lyrics_path:
+        try:
+            return parse_lrc_file(lyrics_path)
+        except Exception as exc:
+            print(f"[Exporter] Failed to parse lyrics override {lyrics_path}: {exc}")
+            return None
+    return track.load_lyrics()
+
+
+def _resolve_scene_features(feature_cache: FeatureCache, feature_overrides: Optional[dict], track_seed: int = 0):
+    """Apply DNA overrides onto analyzed global features for scene/theme creation."""
+    from app.visual.themes import apply_dna_overrides
+
+    return apply_dna_overrides(feature_cache.global_features, feature_overrides, track_seed)
+
+
 def _render_segment_worker(
     ffmpeg_path: str,
     track_path: str,
@@ -123,11 +158,40 @@ def _render_segment_worker(
     start_frame: int,
     end_frame: int,
     duration: float,
-    preroll_frames: int,
     segment_path: str,
     worker_index: int,
     progress_queue,
     cancel_event,
+    ui_overrides: Optional[dict] = None,
+    feature_overrides: Optional[dict] = None,
+    lyrics_path: str = "",
+):
+    """Entry point for spawned worker processes: apply UI overrides, then render."""
+    with settings.override(ui_overrides):
+        _render_segment_worker_impl(
+            ffmpeg_path, track_path, title, artist, width, height, fps,
+            start_frame, end_frame, duration, segment_path, worker_index,
+            progress_queue, cancel_event, feature_overrides, lyrics_path,
+        )
+
+
+def _render_segment_worker_impl(
+    ffmpeg_path: str,
+    track_path: str,
+    title: str,
+    artist: str,
+    width: int,
+    height: int,
+    fps: int,
+    start_frame: int,
+    end_frame: int,
+    duration: float,
+    segment_path: str,
+    worker_index: int,
+    progress_queue,
+    cancel_event,
+    feature_overrides: Optional[dict] = None,
+    lyrics_path: str = "",
 ):
     """Render one contiguous segment into a temporary lossless file."""
     try:
@@ -144,6 +208,7 @@ def _render_segment_worker(
         renderer.resize(width, height)
         renderer.set_target_fps(fps)
 
+        bundle = None
         try:
             from app.dynamics.context import build_dynamics_bundle
             bundle = build_dynamics_bundle(cache, simulation_hz=60.0)
@@ -151,9 +216,11 @@ def _render_segment_worker(
         except Exception as err:
             print(f"[ExportWorker] Dynamics compile fallback: {err}")
 
-        renderer.scene.load_track_features(cache.global_features)
-        renderer.set_track_info(title, artist)
-        renderer.set_lyrics(track.load_lyrics())
+        seed = int(getattr(bundle, "track_seed", 0) or 0)
+        renderer.scene.load_track_features(_resolve_scene_features(cache, feature_overrides, seed))
+        f_hash = getattr(cache.metadata, "file_hash", "")
+        renderer.set_track_info(title, artist, file_hash=f_hash)
+        renderer.set_lyrics(_resolve_lyrics(track, lyrics_path))
 
         ffmpeg_cmd = _build_segment_ffmpeg_command(ffmpeg_path, segment_path, width, height, fps)
         proc = subprocess.Popen(
@@ -169,8 +236,7 @@ def _render_segment_worker(
 
         try:
             start_time = max(0.0, start_frame * dt)
-            preroll_sec = float(preroll_frames) * dt
-            renderer.scene.rebuild_to_time(start_time, width=width, height=height, warmup_seconds=preroll_sec)
+            renderer.scene.rebuild_to_time(start_time, width=width, height=height, fps=fps)
 
             for frame_index in range(start_frame, end_frame):
                 if cancel_event.is_set():
@@ -228,19 +294,20 @@ class VideoExporter:
         """Render the track offline and encode it through ffmpeg."""
         self._validate_options(options)
 
-        worker_count = self._resolve_worker_count(options, feature_cache.duration)
-        if worker_count > 1:
-            try:
-                return self._export_track_parallel(
-                    track=track,
-                    feature_cache=feature_cache,
-                    options=options,
-                    worker_count=worker_count,
-                    progress_callback=progress_callback,
-                    cancel_check=cancel_check,
-                )
-            except Exception as exc:
-                self._report(progress_callback, 0, f"并行渲染回退到单线程: {exc}")
+        if not options.use_gpu_renderer and options.video_codec not in {"av1_amf", "h264_amf", "hevc_amf"}:
+            worker_count = self._resolve_worker_count(options, feature_cache.duration)
+            if worker_count > 1:
+                try:
+                    return self._export_track_parallel(
+                        track=track,
+                        feature_cache=feature_cache,
+                        options=options,
+                        worker_count=worker_count,
+                        progress_callback=progress_callback,
+                        cancel_check=cancel_check,
+                    )
+                except Exception as exc:
+                    self._report(progress_callback, 0, f"并行渲染回退到单线程: {exc}")
 
         return self._export_track_sequential(
             track=track,
@@ -261,9 +328,15 @@ class VideoExporter:
         output_path = Path(options.output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        renderer = VisualizerRenderer()
-        renderer.resize(options.width, options.height)
-        renderer.set_target_fps(options.fps)
+        if options.use_gpu_renderer:
+            from app.visual_gpu.viewport import VisualizerViewport
+            renderer = VisualizerViewport()
+            renderer.resize(options.width, options.height)
+            renderer.set_target_fps(options.fps)
+        else:
+            renderer = VisualizerRenderer()
+            renderer.resize(options.width, options.height)
+            renderer.set_target_fps(options.fps)
 
         try:
             from app.dynamics.context import build_dynamics_bundle
@@ -271,18 +344,15 @@ class VideoExporter:
             renderer.scene.set_dynamics_bundle(bundle)
         except Exception as err:
             print(f"[ExportSeq] Dynamics compile fallback: {err}")
+            bundle = None
 
-        renderer.scene.load_track_features(feature_cache.global_features)
-        renderer.set_track_info(track.metadata.title, track.metadata.artist)
-        renderer.set_lyrics(track.load_lyrics())
-
-        ffmpeg_cmd = self._build_rawvideo_ffmpeg_command(track, options)
-        proc = subprocess.Popen(
-            ffmpeg_cmd,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-        )
+        seq_seed = int(getattr(bundle, "track_seed", 0) or 0)
+        renderer.scene.load_track_features(_resolve_scene_features(feature_cache, options.feature_overrides, seq_seed))
+        seq_f_hash = getattr(feature_cache.metadata, "file_hash", "")
+        seq_title = options.title_override.strip() or track.metadata.title
+        seq_artist = options.artist_override.strip() or track.metadata.artist
+        renderer.set_track_info(seq_title, seq_artist, file_hash=seq_f_hash)
+        renderer.set_lyrics(_resolve_lyrics(track, options.lyrics_path))
 
         duration = max(feature_cache.duration, 0.0)
         total_frames = max(1, int(math.ceil(duration * options.fps)))
@@ -291,68 +361,77 @@ class VideoExporter:
         avg_render_ms = 0.0
         avg_write_ms = 0.0
 
-        try:
-            self._report(progress_callback, 0, "准备离屏渲染器")
-            for frame_index in range(total_frames):
-                if cancel_check and cancel_check():
-                    raise VideoExportCancelled("用户取消导出")
+        with settings.override(options.ui_overrides):
+            ffmpeg_cmd = self._build_rawvideo_ffmpeg_command(track, options)
+            proc = subprocess.Popen(
+                ffmpeg_cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
 
-                t = min(frame_index * dt, max(duration - 1e-6, 0.0))
-                frame = feature_cache.get_frame_at_time(t)
-                renderer.set_playback_position(t)
-                renderer.scene.update(frame, frame is not None, float(options.width), float(options.height), dt)
-                render_start = time.perf_counter()
-                image = renderer.render_to_image(options.width, options.height, dt, reuse_buffer=True)
-                render_end = time.perf_counter()
-                self._write_image(proc.stdin, image)
-                write_end = time.perf_counter()
-
-                render_ms = (render_end - render_start) * 1000.0
-                write_ms = (write_end - render_end) * 1000.0
-                if frame_index == 0:
-                    avg_render_ms = render_ms
-                    avg_write_ms = write_ms
-                else:
-                    avg_render_ms = avg_render_ms * 0.92 + render_ms * 0.08
-                    avg_write_ms = avg_write_ms * 0.92 + write_ms * 0.08
-
-                now = time.perf_counter()
-                if frame_index == 0 or frame_index == total_frames - 1 or (now - last_report_time) >= 0.10:
-                    pct = int(((frame_index + 1) / total_frames) * 100)
-                    self._report(
-                        progress_callback,
-                        min(pct, 99),
-                        f"正在渲染帧 {frame_index + 1}/{total_frames} | 渲染 {avg_render_ms:.1f}ms | 写入编码器 {avg_write_ms:.1f}ms",
-                    )
-                    last_report_time = now
-
-            if proc.stdin:
-                proc.stdin.close()
-
-            stderr_text = ""
-            if proc.stderr:
-                stderr_text = proc.stderr.read().decode("utf-8", errors="ignore")
-            return_code = proc.wait()
-            if return_code != 0:
-                raise VideoExportError(stderr_text.strip() or f"ffmpeg exited with code {return_code}")
-
-            self._report(progress_callback, 100, "导出完成")
-            return output_path
-
-        except Exception:
-            if proc.stdin and not proc.stdin.closed:
-                proc.stdin.close()
-            proc.terminate()
             try:
-                proc.wait(timeout=3)
+                self._report(progress_callback, 0, "准备离屏渲染器")
+                for frame_index in range(total_frames):
+                    if cancel_check and cancel_check():
+                        raise VideoExportCancelled("用户取消导出")
+
+                    t = min(frame_index * dt, max(duration - 1e-6, 0.0))
+                    frame = feature_cache.get_frame_at_time(t)
+                    renderer.set_playback_position(t)
+                    renderer.scene.update(frame, frame is not None, float(options.width), float(options.height), dt)
+                    render_start = time.perf_counter()
+                    image = renderer.render_to_image(options.width, options.height, dt, reuse_buffer=True)
+                    render_end = time.perf_counter()
+                    self._write_image(proc.stdin, image)
+                    write_end = time.perf_counter()
+
+                    render_ms = (render_end - render_start) * 1000.0
+                    write_ms = (write_end - render_end) * 1000.0
+                    if frame_index == 0:
+                        avg_render_ms = render_ms
+                        avg_write_ms = write_ms
+                    else:
+                        avg_render_ms = avg_render_ms * 0.92 + render_ms * 0.08
+                        avg_write_ms = avg_write_ms * 0.92 + write_ms * 0.08
+
+                    now = time.perf_counter()
+                    if frame_index == 0 or frame_index == total_frames - 1 or (now - last_report_time) >= 0.10:
+                        pct = int(((frame_index + 1) / total_frames) * 100)
+                        self._report(
+                            progress_callback,
+                            min(pct, 99),
+                            f"正在渲染帧 {frame_index + 1}/{total_frames} | 渲染 {avg_render_ms:.1f}ms | 写入编码器 {avg_write_ms:.1f}ms",
+                        )
+                        last_report_time = now
+
+                if proc.stdin:
+                    proc.stdin.close()
+
+                stderr_text = ""
+                if proc.stderr:
+                    stderr_text = proc.stderr.read().decode("utf-8", errors="ignore")
+                return_code = proc.wait()
+                if return_code != 0:
+                    raise VideoExportError(stderr_text.strip() or f"ffmpeg exited with code {return_code}")
+
+                self._report(progress_callback, 100, "导出完成")
+                return output_path
+
             except Exception:
-                proc.kill()
-            if output_path.exists():
+                if proc.stdin and not proc.stdin.closed:
+                    proc.stdin.close()
+                proc.terminate()
                 try:
-                    output_path.unlink()
+                    proc.wait(timeout=3)
                 except Exception:
-                    pass
-            raise
+                    proc.kill()
+                if output_path.exists():
+                    try:
+                        output_path.unlink()
+                    except Exception:
+                        pass
+                raise
 
     def _export_track_parallel(
         self,
@@ -369,7 +448,6 @@ class VideoExporter:
         duration = max(feature_cache.duration, 0.0)
         total_frames = max(1, int(math.ceil(duration * options.fps)))
         frame_ranges = self._partition_frames(total_frames, worker_count)
-        preroll_frames = self._compute_parallel_preroll_frames(options.fps, feature_cache)
         ctx = mp.get_context("spawn")
         progress_queue = ctx.Queue()
         cancel_event = ctx.Event()
@@ -387,19 +465,21 @@ class VideoExporter:
                         args=(
                             self.ffmpeg_path,
                             track.file_path,
-                            track.metadata.title,
-                            track.metadata.artist,
+                            options.title_override.strip() or track.metadata.title,
+                            options.artist_override.strip() or track.metadata.artist,
                             options.width,
                             options.height,
                             options.fps,
                             start_frame,
                             end_frame,
                             duration,
-                            preroll_frames,
                             segment_path,
                             idx,
                             progress_queue,
                             cancel_event,
+                            options.ui_overrides,
+                            options.feature_overrides,
+                            options.lyrics_path,
                         ),
                         daemon=True,
                     )
@@ -498,15 +578,6 @@ class VideoExporter:
         cpu_count = os.cpu_count() or 1
         return max(1, min(4, cpu_count // 2 if cpu_count > 4 else cpu_count))
 
-    def _compute_parallel_preroll_frames(self, fps: int, feature_cache: FeatureCache) -> int:
-        tempo = 120.0
-        if feature_cache and feature_cache.global_features:
-            tempo = max(60.0, float(getattr(feature_cache.global_features, "tempo", 120.0)))
-        beat_period = 60.0 / tempo
-        bars_4_4 = beat_period * 16.0
-        preroll_sec = max(_PARALLEL_PREROLL_SECONDS, min(8.0, bars_4_4))
-        return max(1, int(round(preroll_sec * max(fps, 1))))
-
     def _partition_frames(self, total_frames: int, worker_count: int) -> list[tuple[int, int]]:
         chunk = max(1, math.ceil(total_frames / max(worker_count, 1)))
         ranges = []
@@ -534,6 +605,15 @@ class VideoExporter:
             "-hide_banner",
             "-loglevel",
             "error",
+        ]
+        if options.video_codec in {"av1_amf", "h264_amf", "hevc_amf"}:
+            cmd += [
+                "-init_hw_device",
+                "d3d11va=amf:0",
+                "-filter_hw_device",
+                "amf",
+            ]
+        cmd += [
             "-threads",
             "0",
             "-f",
@@ -573,24 +653,41 @@ class VideoExporter:
         if options.include_audio:
             cmd += ["-i", track.file_path, "-map", "0:v:0", "-map", "1:a:0?"]
 
+        is_amf = options.video_codec in {"av1_amf", "h264_amf", "hevc_amf"}
+
+        if is_amf:
+            cmd += ["-vf", "format=rgba,hwupload"]
+
         cmd += ["-c:v", options.video_codec]
-        
-        # Preset handling
-        if options.preset:
-            preset_val = options.preset
-            # SVT-AV1 often prefers numeric presets for compatibility
+
+        # Preset / Quality handling
+        if is_amf:
+            quality_val = options.preset if options.preset in {"high_quality", "quality", "balanced", "speed"} else "quality"
+            cmd += ["-quality", quality_val]
+            cmd += ["-usage", "transcoding"]
+        elif options.preset:
+            # WebUI exposes semantic quality names; translate them to codec-native
+            # presets because x264/x265 reject values like "quality".
+            preset_val = _QUALITY_PRESET_ALIASES.get(options.preset, options.preset)
+            # Codec-specific preset mapping for SVT-AV1 and NVENC
             if options.video_codec == "libsvtav1":
                 mapping = {"veryslow": "1", "slower": "2", "slow": "4", "medium": "6", "fast": "8", "faster": "10", "veryfast": "12", "ultrafast": "13"}
                 preset_val = mapping.get(options.preset, options.preset)
-            
+            elif options.video_codec in {"h264_nvenc", "hevc_nvenc", "av1_nvenc"}:
+                mapping = {"veryslow": "p7", "slower": "p7", "slow": "p6", "medium": "p4", "fast": "p3", "faster": "p2", "veryfast": "p2", "ultrafast": "p1"}
+                preset_val = mapping.get(options.preset, "p6")
+
             if self._codec_supports_preset(options.video_codec):
                 cmd += ["-preset", preset_val]
 
-        if options.crf is not None and self._codec_supports_crf(options.video_codec):
+        if not is_amf and options.crf is not None and self._codec_supports_crf(options.video_codec):
             cmd += ["-crf", str(options.crf)]
+        elif options.video_codec in {"av1_amf", "h264_amf", "hevc_amf", "h264_nvenc", "hevc_nvenc", "av1_nvenc"} and not options.video_bitrate:
+            cmd += ["-b:v", "20M"]
+
         if options.video_bitrate:
             cmd += ["-b:v", options.video_bitrate]
-        if options.pixel_format:
+        if not is_amf and options.pixel_format:
             cmd += ["-pix_fmt", options.pixel_format]
 
         if options.include_audio:
@@ -614,9 +711,7 @@ class VideoExporter:
             "libsvtav1",
             "h264_nvenc",
             "hevc_nvenc",
-            "h264_amf",
-            "hevc_amf",
-            "av1_amf",
+            "av1_nvenc",
             "h264_qsv",
             "hevc_qsv",
             "av1_qsv",

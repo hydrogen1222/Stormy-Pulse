@@ -331,20 +331,22 @@ class FeatureExtractor:
         impact = np.clip(np.mean(perc_e) / (np.mean(harm_e) + 1e-8), 0, 1)
         pressure = np.clip(energy * b_ratio * 3.0, 0, 1)
         sparkle = np.clip(h_ratio * 2.5 + avg_centroid, 0, 1)
-        density = np.clip(1.0 - avg_flatness + energy, 0, 1)
-        warmth = np.clip(1.0 - avg_centroid * 0.8 + b_ratio * 0.4, 0, 1)
+        # Density: dynamic scale over energy, impact, and spectral flatness
+        density = np.clip(energy * 0.45 + impact * 0.35 + (1.0 - avg_flatness) * 0.20, 0.1, 1.0)
+        # Warmth: continuous scaling over bass ratio and centroid
+        warmth = np.clip(0.5 + (b_ratio - 0.35) * 1.6 - (avg_centroid - 0.25) * 1.4, 0.1, 1.0)
         
         semantics = SemanticControlSet(
             impact=impact,
             pressure=pressure,
             sparkle=sparkle,
             density=density,
-            tension=chaos * 0.6 + energy * 0.4,
+            tension=np.clip(chaos * 0.6 + energy * 0.4, 0, 1),
             warmth=warmth,
-            flow=beat_regularity * 0.7 + (1.0 - chaos) * 0.3,
+            flow=np.clip(beat_regularity * 0.7 + (1.0 - chaos) * 0.3, 0, 1),
             chaos=chaos,
             lift=np.clip(tempo / 180.0 * 0.5 + h_ratio * 0.5, 0, 1),
-            climax_score=energy * 0.8 + density * 0.2
+            climax_score=np.clip(energy * 0.75 + density * 0.25, 0, 1)
         )
         
         # --- DETERMINISTIC VISUAL MAPPING (The "Fingerprint" Logic) ---
@@ -366,19 +368,19 @@ class FeatureExtractor:
         # 2. Mood Prior
         if energy > 0.65 and global_contrast > 0.4:
             mood = "energetic"
-        elif energy < 0.4 and avg_flatness < 0.1:
+        elif energy < 0.35 and impact < 0.35:
             mood = "chill"
-        elif avg_centroid < 0.3:
+        elif avg_centroid < 0.22:
             mood = "dark"
         else:
             mood = "melodic"
 
         # 3. Structure Type from True Spectral Balance & Chaos
-        if b_ratio > 0.42:
+        if b_ratio > 0.45:
             structure_type = "reactor" # Bass heavy needs a solid core
-        elif h_ratio > 0.25 or avg_centroid > 0.5:
+        elif h_ratio > 0.10 or avg_centroid > 0.35:
             structure_type = "vortex"  # High end detail suits vortex
-        elif chaos > 0.65:
+        elif chaos > 0.55:
             structure_type = "organic" # Unpredictable music suits organic
         else:
             structure_type = "pulse"   # Balanced/Electronic suits pulse

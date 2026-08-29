@@ -249,12 +249,11 @@ def build_dynamics_bundle(
     Centralized factory for creating full-track DynamicsBundle.
     Generates stable cross-process track_seed using BLAKE2b digest on metadata.file_hash.
     """
-    import hashlib
+    from .deterministic import canonical_track_seed
     from .trajectory import MaterialTrajectoryCompiler
 
     file_hash = getattr(feature_cache.metadata, "file_hash", "default_hash")
-    digest = hashlib.blake2b(file_hash.encode("utf-8"), digest_size=8).digest()
-    track_seed = int.from_bytes(digest, "little")
+    track_seed = canonical_track_seed(file_hash)
 
     rms_arr = feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_RMS]
     flx_arr = feature_cache.frame_seq.features[:, feature_cache.frame_seq.F_FLUX]

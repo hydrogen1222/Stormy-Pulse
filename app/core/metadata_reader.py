@@ -28,6 +28,14 @@ class TrackMetadata:
         self.channels = 2
         self.cover_art: Optional[bytes] = None
         self.cover_art_mime = ""
+        import hashlib
+        p = Path(file_path)
+        try:
+            stat_info = p.stat()
+            h_str = f"{p.as_posix()}_{stat_info.st_size}_{stat_info.st_mtime}"
+        except Exception:
+            h_str = p.as_posix()
+        self.file_hash = hashlib.blake2b(h_str.encode("utf-8"), digest_size=16).hexdigest()
 
         self._read_metadata()
 

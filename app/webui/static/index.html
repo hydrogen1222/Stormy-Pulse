@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Stormy-Pulse 音乐可视化工作站</title>
+<link rel="stylesheet" href="/static/style.css?v=4">
+</head>
+<body>
+<header>
+  <div class="brand">
+    <span class="logo">🎵</span>
+    <div>
+      <h1>Stormy-Pulse 音乐可视化工作站</h1>
+      <p>实时播放渲染 · 无头服务器 / 局域网 · 硬件加速视频导出</p>
+    </div>
+  </div>
+  <div id="sysBadges" class="badges"></div>
+</header>
+
+<main>
+  <!-- ============ 左栏：媒体库 ============ -->
+  <aside class="panel" id="mediaPanel">
+    <h2>📂 媒体库</h2>
+    <label class="drop" id="audioDrop">
+      <input type="file" id="audioFile" accept=".mp3,.flac,.wav,.ogg,.m4a,.opus" hidden>
+      <span class="drop-icon">🎼</span>
+      <span class="drop-text">点击选择音频文件<br><small>mp3 / flac / wav / ogg / m4a</small></span>
+    </label>
+    <label class="drop small" id="lrcDrop">
+      <input type="file" id="lrcFile" accept=".lrc" hidden>
+      <span class="drop-text">📝 附加歌词 .lrc（可选）</span>
+    </label>
+
+    <div id="analysisBox" class="analysis hidden">
+      <div class="progress-track"><div id="analysisBar" class="progress-bar"></div></div>
+      <div id="analysisMsg" class="muted small-text">准备分析...</div>
+    </div>
+
+    <div id="trackCard" class="track-card hidden">
+      <div class="track-title" id="tTitle">—</div>
+      <div class="track-artist" id="tArtist">—</div>
+      <div class="track-meta" id="tMeta"></div>
+    </div>
+
+    <div id="errorBox" class="error-box hidden"></div>
+  </aside>
+
+  <!-- ============ 中栏：播放器 ============ -->
+  <section class="player">
+    <div class="stage-wrap">
+      <img id="stage" alt="可视化预览" draggable="false">
+      <div id="stageHint" class="stage-hint">上传音频后将自动分析，点击 ▶ 开始实时播放</div>
+    </div>
+
+    <div class="transport">
+      <button id="playBtn" class="play-btn" disabled>▶</button>
+      <span id="curTime" class="time">0:00</span>
+      <input id="seekBar" type="range" min="0" max="1000" value="0" step="1" disabled>
+      <span id="durTime" class="time">0:00</span>
+      <span class="vol-wrap">🔊 <input id="volBar" type="range" min="0" max="100" value="80"></span>
+      <span id="fpsInfo" class="muted small-text"></span>
+    </div>
+    <audio id="player" preload="auto"></audio>
+  </section>
+
+  <!-- ============ 右栏：参数 ============ -->
+  <aside class="panel" id="paramPanel">
+    <h2>🎨 视觉 DNA</h2>
+    <div class="group">
+      <label>结构原型
+        <select id="p_structure">
+          <option value="auto">自动（跟随曲目）</option>
+          <option value="pulse">脉冲放射</option>
+          <option value="vortex">漩涡涡旋</option>
+          <option value="reactor">反应堆</option>
+          <option value="organic">有机细胞</option>
+        </select>
+      </label>
+      <label>色系
+        <select id="p_palette_family"></select>
+      </label>
+      <label>色相偏移 <span class="val" id="v_hue_shift">0°</span>
+        <input type="range" id="p_hue_shift" min="-180" max="180" step="1" value="0">
+      </label>
+      <div class="row3">
+        <label>能量 <input type="range" id="p_energy" min="0" max="1" step="0.01" value="0.5"></label>
+        <label>混沌 <input type="range" id="p_chaos" min="0" max="1" step="0.01" value="0.3"></label>
+        <label>明亮 <input type="range" id="p_brightness" min="0" max="1" step="0.01" value="0.5"></label>
+      </div>
+      <label>画幅
+        <select id="p_aspect">
+          <option value="16:9">16:9 横屏</option>
+          <option value="9:16">9:16 竖屏</option>
+        </select>
+      </label>
+      <label>预览清晰度
+        <select id="p_frame_height">
+          <option value="480">480p 流畅</option>
+          <option value="720" selected>720p 标准</option>
+          <option value="1080">1080p 高清</option>
+        </select>
+      </label>
+    </div>
+
+    <h2>🎴 标题排版</h2>
+    <div class="group">
+      <input type="text" id="p_custom_title" placeholder="自定义歌曲名（留空用元数据）">
+      <input type="text" id="p_custom_artist" placeholder="自定义艺术家（留空用元数据）">
+      <div class="row2">
+        <label class="check"><input type="checkbox" id="p_show_title" checked> 显示歌名</label>
+        <label class="check"><input type="checkbox" id="p_show_artist" checked> 显示艺术家</label>
+      </div>
+      <label>歌名缩放 <input type="range" id="p_title_scale" min="0.5" max="2.2" step="0.05" value="1"></label>
+      <div class="row2">
+        <label>偏移X <input type="range" id="p_title_x" min="-50" max="50" step="0.5" value="0"></label>
+        <label>偏移Y <input type="range" id="p_title_y" min="-50" max="50" step="0.5" value="0"></label>
+      </div>
+      <label>艺术家缩放 <input type="range" id="p_artist_scale" min="0.5" max="2.2" step="0.05" value="1"></label>
+      <div class="row2">
+        <label>偏移X <input type="range" id="p_artist_x" min="-50" max="50" step="0.5" value="0"></label>
+        <label>偏移Y <input type="range" id="p_artist_y" min="-50" max="50" step="0.5" value="0"></label>
+      </div>
+    </div>
+
+    <h2>📊 HUD 与歌词</h2>
+    <div class="group">
+      <div class="row2">
+        <label class="check"><input type="checkbox" id="p_show_left_hud" checked> 左侧 HUD</label>
+        <label class="check"><input type="checkbox" id="p_show_right_hud" checked> 右侧监控</label>
+      </div>
+      <label>HUD 缩放 <input type="range" id="p_hud_scale" min="0.5" max="2.2" step="0.05" value="1"></label>
+      <label>特效缩放 <input type="range" id="p_effect_scale" min="0.5" max="2.2" step="0.05" value="1"></label>
+      <label class="check"><input type="checkbox" id="p_show_lyrics"> 显示歌词面板</label>
+      <label>歌词缩放 <input type="range" id="p_lyrics_scale" min="0.5" max="2.2" step="0.05" value="1"></label>
+      <div class="row2">
+        <label>歌词偏移X <input type="range" id="p_lyrics_x" min="-50" max="50" step="0.5" value="0"></label>
+        <label>歌词偏移Y <input type="range" id="p_lyrics_y" min="-50" max="50" step="0.5" value="0"></label>
+      </div>
+    </div>
+
+    <h2>🚀 视频导出</h2>
+    <div class="group">
+      <div class="row2">
+        <label>分辨率
+          <select id="e_res">
+            <option value="1920x1080">1080p 16:9</option>
+            <option value="2560x1440">2K 16:9</option>
+            <option value="3840x2160">4K 16:9</option>
+            <option value="1280x720">720p 16:9</option>
+            <option value="1080x1920">1080p 竖屏</option>
+            <option value="720x1280">720p 竖屏</option>
+          </select>
+        </label>
+        <label>帧率
+          <select id="e_fps"><option value="30">30</option><option value="60" selected>60</option><option value="120">120</option></select>
+        </label>
+      </div>
+      <div class="row2">
+        <label>编码器 <select id="e_codec"></select></label>
+        <label>预设 <select id="e_preset"></select></label>
+      </div>
+      <div class="row2">
+        <label>视频码率
+          <select id="e_bitrate"><option>8M</option><option selected>16M</option><option>25M</option><option>50M</option></select>
+        </label>
+        <label>音频码率
+          <select id="e_abitrate"><option selected>320k</option><option>256k</option><option>192k</option></select>
+        </label>
+      </div>
+      <label>并行渲染进程 <span class="val" id="v_workers">4</span>
+        <input type="range" id="e_workers" min="1" max="16" step="1" value="4">
+      </label>
+      <label class="check" id="gpuRenderWrap" title="使用 OpenGL 硬件加速渲染每一帧，大幅降低 CPU 负载">
+        <input type="checkbox" id="e_gpu"> 🧬 GPU 渲染每一帧 (OpenGL，单线程)
+      </label>
+      <button id="exportBtn" class="primary" disabled>🚀 开始全量导出视频</button>
+      <button id="cancelExportBtn" class="hidden">⛔ 取消导出</button>
+      <div id="exportBox" class="export-box hidden">
+        <div class="progress-track"><div id="exportBar" class="progress-bar"></div></div>
+        <div id="exportMsg" class="muted small-text"></div>
+        <a id="exportLink" class="download hidden" href="#" download>⬇ 下载导出的视频</a>
+      </div>
+      <button id="clipBtn" disabled>🎬 生成当前时间 5s 试看片段</button>
+      <div id="clipBox" class="hidden">
+        <video id="clipVideo" controls></video>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script src="/static/app.js?v=4"></script>
+</body>
+</html>

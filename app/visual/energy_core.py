@@ -9,6 +9,7 @@ class EnergyCore:
     """Represents the central energy hub of the visualization."""
 
     def __init__(self, track_seed: int = 42):
+        self.track_seed = track_seed
         self.size = 20.0
         self.brightness = 0.5
         self.rotation = 0.0

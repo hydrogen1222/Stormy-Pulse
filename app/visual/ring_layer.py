@@ -19,6 +19,8 @@ class RingLayer:
         self.broken_segments: List[int] = [0] * ring_count
         self.damage_current: List[float] = [0.0] * ring_count
         self.phase_state = None
+        self.material = None
+        self.geometry = None
 
     def update(
         self,

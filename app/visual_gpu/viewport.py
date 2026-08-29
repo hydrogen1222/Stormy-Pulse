@@ -25,6 +25,7 @@ class VisualizerViewport(QWidget):
         self.track_lyrics = None
         self.playback_position = 0.0
         self._last_fbo_watchdog = 0.0
+        self._offscreen_composite_cache: Optional[QImage] = None
         self.gl_widget = OpenGLSceneWidget(self.scene, self)
         self.overlay = HudOverlayRenderer(self.scene, self)
         self.gl_widget.raise_()
@@ -51,11 +52,12 @@ class VisualizerViewport(QWidget):
         if width <= 0 or height <= 0:
             return
 
+        show_top_info = settings.get("show_track_title", True) or settings.get("show_track_artist", True)
         layout = self.gl_widget.bridge._get_layout_metrics(
             width,
             height,
             settings.get("hud_scale", 1.0),
-            settings.get("show_track_title", True),
+            show_top_info,
             settings.get("show_left_hud", True),
             settings.get("show_right_hud", True),
             settings.get("show_lyrics", False),
@@ -64,16 +66,18 @@ class VisualizerViewport(QWidget):
         self.overlay._layout_state = dict(layout)
 
     def _sync_overlay_state(self):
+        if hasattr(self.gl_widget, "actual_fps"):
+            self.gl_widget.bridge._actual_fps = self.gl_widget.actual_fps
         self.overlay.sync_from_renderer(self.gl_widget.bridge)
 
     def set_target_fps(self, fps: int):
         self.gl_widget.set_target_fps(fps)
         self.overlay.set_target_fps(fps)
 
-    def set_track_info(self, title: str, artist: str):
+    def set_track_info(self, title: str, artist: str, fingerprint: str = "", file_hash: str = ""):
         self.track_title = title
         self.track_artist = artist
-        self.gl_widget.set_track_info(title, artist)
+        self.gl_widget.set_track_info(title, artist, fingerprint=fingerprint, file_hash=file_hash)
         self._rebuild_layout_state()
         self._sync_overlay_state()
 
@@ -84,8 +88,13 @@ class VisualizerViewport(QWidget):
         self._sync_overlay_state()
 
     def set_playback_position(self, position: float):
-        self.playback_position = position
         self.gl_widget.set_playback_position(position)
+        self.overlay.playback_position = position
+
+    def seek_interactive(self, position: float):
+        if hasattr(self.scene, "seek_interactive"):
+            self.scene.seek_interactive(position)
+        self.set_playback_position(position)
         self._sync_overlay_state()
 
     def start(self):
@@ -111,7 +120,13 @@ class VisualizerViewport(QWidget):
         self.overlay.reset()
         self.reset_layout_cache()
 
-    def render_to_image(self, width: int, height: int, frame_dt: float = 0.016) -> QImage:
+    def render_to_image(
+        self,
+        width: int,
+        height: int,
+        frame_dt: float = 0.016,
+        reuse_buffer: bool = False,
+    ) -> QImage:
         """Render a composited frame from the GL scene and HUD overlay."""
         if self.width() != width or self.height() != height:
             self.resize(width, height)
@@ -132,10 +147,24 @@ class VisualizerViewport(QWidget):
         QApplication.processEvents()
 
         scene_image = self.gl_widget.grabFramebuffer()
-        self._sync_overlay_state()
-        overlay_image = self.overlay.render_overlay_to_image(width, height, frame_dt)
+        if scene_image.isNull() or scene_image.width() <= 0 or scene_image.height() <= 0:
+            raise RuntimeError("OpenGL context / Framebuffer Object (FBO) 创建失败，无法进行 GPU 帧渲染")
 
-        composite = QImage(width, height, QImage.Format.Format_RGBA8888)
+        self._sync_overlay_state()
+        overlay_image = self.overlay.render_overlay_to_image(width, height, frame_dt, reuse_buffer=reuse_buffer)
+
+        if reuse_buffer:
+            if (
+                self._offscreen_composite_cache is None
+                or self._offscreen_composite_cache.width() != width
+                or self._offscreen_composite_cache.height() != height
+                or self._offscreen_composite_cache.format() != QImage.Format.Format_RGBA8888
+            ):
+                self._offscreen_composite_cache = QImage(width, height, QImage.Format.Format_RGBA8888)
+            composite = self._offscreen_composite_cache
+        else:
+            composite = QImage(width, height, QImage.Format.Format_RGBA8888)
+
         composite.fill(0)
         painter = QPainter(composite)
         painter.drawImage(0, 0, scene_image)
@@ -149,7 +178,6 @@ class VisualizerViewport(QWidget):
         self.gl_widget.update()
         self.overlay.update()
         self._run_fbo_watchdog()
-        super().update()
 
     def _run_fbo_watchdog(self):
         """Periodically verify the GL framebuffer matches the widget size.

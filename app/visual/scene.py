@@ -16,6 +16,8 @@ from .pes_field import PESField
 from ..dynamics.deterministic import (
     deterministic_float,
     deterministic_signed,
+    deterministic_hash_uint64,
+    canonical_track_seed,
 )
 from ..dynamics.field import AnalyticalPESField
 
@@ -23,41 +25,38 @@ DEBUG_EVENT_SYNC = False
 
 
 class Scene:
-    """Manages the visual scene and its elements."""
+    """Coordinates visual rendering components and drives V2 material dynamics."""
 
     def __init__(self):
-        # Visual DNA
-        self.theme: Optional[Theme] = None
-        self.global_features: Optional[GlobalFeatureSet] = None
+        self.time = 0.0
+        self.viewport_width = 1280.0
+        self.viewport_height = 720.0
 
-        # Condensed Matter Physical Dynamics Engines
+        self.global_features: Optional[GlobalFeatureSet] = None
+        self.theme: Optional[Theme] = None
+        self.effects = EffectState()
+        self.particles = ParticleSystem(max_particles=1600)
+        self.ring_layer = RingLayer()
+        self.energy_core = EnergyCore()
+
         self.phase_engine = PhaseEngine()
         self.pes_field = PESField()
-        self.phase_state = None
 
-        # V2 Dynamics Pipeline
         self.dynamics_bundle = None
         self.analytical_field = AnalyticalPESField()
         self.current_material_state = None
         self.current_context = None
+        self.current_geometry_control = None
 
-        # Visual elements
-        self.effects = EffectState()
-        self.particles = ParticleSystem(max_particles=1600)
-        self.ring_layer = RingLayer(ring_count=5)
-        self.energy_core = EnergyCore()
-
-        # Current frame data
-        self.current_frame: Optional[FeatureFrame] = None
+        self.vortex_angle = 0.0
         self.is_on_beat = False
         self.beat_strength = 0.0
-
-        # Time tracking
-        self.time = 0.0
-        self.vortex_angle = 0.0
-        self.last_onset_time = 0.0
         self.last_beat_time = 0.0
-        self.last_update_center = (0.0, 0.0)
+        self.last_onset_time = 0.0
+        self.last_time_processed = 0.0
+        self._last_ambient_sim_slot = -1
+        self._acc_sim_dt = 0.0
+
         self.audio_drive = {
             "rms": 0.0,
             "bass": 0.0,
@@ -65,14 +64,17 @@ class Scene:
             "high": 0.0,
             "onset": 0.0,
             "beat": 0.0,
+            "pressure": 0.0,
+            "sparkle": 0.0,
+            "density": 0.0,
+            "tension": 0.0,
             "centroid": 0.0,
             "rolloff": 0.0,
             "flatness": 0.0,
-            "sparkle": 0.0,
-            "pressure": 0.0,
-            "density": 0.0,
-            "tension": 0.0,
         }
+        self.phase_state = None
+        self.current_frame: Optional[FeatureFrame] = None
+        self.last_update_center: Optional[tuple] = None
 
     def _smooth_env(
         self,
@@ -86,31 +88,100 @@ class Scene:
         rate = attack if target > current else release
         return current + (target - current) * min(rate * sf, 1.0)
 
-    def set_dynamics_bundle(self, bundle):
-        """Attach V2 DynamicsBundle."""
-        self.dynamics_bundle = bundle
-        self.analytical_field = AnalyticalPESField()
+    def get_track_seed(self) -> int:
+        """Derive deterministic track seed from bundle or metadata using canonical_track_seed."""
+        if self.dynamics_bundle is not None and hasattr(self.dynamics_bundle, "track_seed"):
+            return self.dynamics_bundle.track_seed
+        if self.global_features is not None and hasattr(self.global_features, "metadata") and self.global_features.metadata is not None:
+            f_hash = getattr(self.global_features.metadata, "file_hash", None)
+            return canonical_track_seed(f_hash)
+        return 42
+
+    def reset(self, target_time: float = 0.0):
+        """Public component reset: clears track-scoped references and resets all transient variables."""
+        self.reset_transients(target_time=target_time, clear_track_scope=True)
+
+    def reset_transients(self, target_time: float = 0.0, clear_track_scope: bool = False):
+        """
+        Reset transient simulation variables.
+        If clear_track_scope=True, clears track-scoped references (bundle, global_features, theme).
+        """
+        if clear_track_scope:
+            self.dynamics_bundle = None
+            self.global_features = None
+            self.theme = None
+            self.analytical_field = AnalyticalPESField()
+
+        self.time = max(0.0, float(target_time))
+        self.last_time_processed = self.time
+        self.vortex_angle = 0.0
+        self.is_on_beat = False
+        self.beat_strength = 0.0
+        self.last_beat_time = 0.0
+        self.last_onset_time = 0.0
+        self._last_ambient_sim_slot = -1
+        self._acc_sim_dt = 0.0
+        self.last_update_center = None
+
+        seed = self.get_track_seed()
+        self.effects = EffectState()
+        self.particles.clear()
+        ring_cnt = getattr(self.theme, "ring_count", getattr(self.ring_layer, "ring_count", 5))
+        self.ring_layer = RingLayer(ring_count=ring_cnt)
+        self.energy_core = EnergyCore(track_seed=seed)
+        self.phase_engine = PhaseEngine()
+        self.pes_field = PESField()
+        self.phase_state = None
+        self.current_frame = None
+
+        self.audio_drive = {
+            "rms": 0.0,
+            "bass": 0.0,
+            "mid": 0.0,
+            "high": 0.0,
+            "onset": 0.0,
+            "beat": 0.0,
+            "pressure": 0.0,
+            "sparkle": 0.0,
+            "density": 0.0,
+            "tension": 0.0,
+            "centroid": 0.0,
+            "rolloff": 0.0,
+            "flatness": 0.0,
+        }
+        self.current_material_state = None
+        self.current_context = None
+        self.current_geometry_control = None
 
     def rebuild_to_time(
         self,
         time: float,
         width: float | None = None,
         height: float | None = None,
-        warmup_seconds: float = 2.0,
+        fps: float = 60.0,
     ):
-        """Central single owner for transient scene rebuild and deterministic particle warmup."""
+        """Central single owner for transient scene rebuild and FPS-matching simulation full-history replay."""
         target_time = max(0.0, float(time))
         w_w = width if width is not None else getattr(self, "viewport_width", 1280.0)
         w_h = height if height is not None else getattr(self, "viewport_height", 720.0)
 
-        self.time = target_time
-        self.effects = EffectState()
-        self.particles.clear()
-        self.last_onset_time = 0.0
-        self.last_beat_time = 0.0
-        self.ring_layer = RingLayer(ring_count=self.ring_layer.ring_count)
-        self.energy_core = EnergyCore()
+        sim_dt = 1.0 / max(1.0, float(fps))
 
+        # Replay from 0.0 up to target_time for exact 100% deterministic snapshot equivalence
+        self.reset_transients(target_time=0.0, clear_track_scope=False)
+
+        if target_time > 0.0 and self.dynamics_bundle is not None and hasattr(self.dynamics_bundle.context_builder.cache, "get_frame_at_time"):
+            cache = self.dynamics_bundle.context_builder.cache
+            w_times = np.arange(0.0, max(0.0, target_time - 1e-6), sim_dt)
+            for wt in w_times:
+                self.time = wt
+                frame = cache.get_frame_at_time(wt)
+                if frame is not None:
+                    self._update_internal(frame, is_playing=True, width=w_w, height=w_h, dt=sim_dt, detect_seek=False)
+
+        # Align target time and last_time_processed for exact event boundary crossing
+        self.time = target_time
+        self.last_time_processed = max(0.0, target_time - sim_dt) if target_time > 0.0 else 0.0
         if self.dynamics_bundle is not None:
             mat = self.dynamics_bundle.material_trajectory.get_state_at_time(target_time)
             ctx = self.dynamics_bundle.context_builder.at(target_time)
@@ -119,34 +190,54 @@ class Scene:
             self.current_geometry_control = mat.geometry_control if mat is not None else None
             self.analytical_field.update(ctx, mat)
 
-            # Warmup short transient visual state over requested warmup_seconds
-            warmup_start = max(0.0, target_time - max(0.0, warmup_seconds))
-            if target_time > 0.0 and hasattr(self.dynamics_bundle.context_builder.cache, "get_frame_at_time"):
-                cache = self.dynamics_bundle.context_builder.cache
-                w_dt = 0.033
-                w_times = np.arange(warmup_start, target_time, w_dt)
+    def seek_to(self, time: float, width: float | None = None, height: float | None = None, fps: float = 60.0):
+        """Seek scene to exact timestamp with FPS-matching simulation full-history replay."""
+        self.rebuild_to_time(time, width=width, height=height, fps=fps)
 
-                self.time = warmup_start
-                for wt in w_times:
-                    frame = cache.get_frame_at_time(wt)
-                    if frame is not None:
-                        self._update_internal(frame, is_playing=True, width=w_w, height=w_h, dt=w_dt, detect_seek=False)
-
-            # Re-confirm target state
-            self.time = target_time
+    def seek_interactive(self, time: float, width: float | None = None, height: float | None = None):
+        """Fast O(1) interactive seek for UI playback dragging without 0..T replay."""
+        t = max(0.0, float(time))
+        self.reset_transients(target_time=t, clear_track_scope=False)
+        self.time = t
+        self.last_time_processed = t
+        if self.dynamics_bundle is not None:
+            mat = self.dynamics_bundle.material_trajectory.get_state_at_time(t)
+            ctx = self.dynamics_bundle.context_builder.at(t)
             self.current_material_state = mat
             self.current_context = ctx
             self.current_geometry_control = mat.geometry_control if mat is not None else None
+            self.analytical_field.update(ctx, mat)
+            if hasattr(self.dynamics_bundle.context_builder.cache, "get_frame_at_time"):
+                frame = self.dynamics_bundle.context_builder.cache.get_frame_at_time(t)
+                if frame is not None:
+                    self.current_frame = frame
 
-    def seek_to(self, time: float, width: float | None = None, height: float | None = None):
-        """Seek scene to exact timestamp with non-recursive deterministic particle warmup."""
-        self.rebuild_to_time(time, width=width, height=height, warmup_seconds=2.0)
+    def set_dynamics_bundle(self, bundle):
+        """Attach V2 DynamicsBundle and reset transient state for new track. If bundle is None, clear track scope."""
+        self.dynamics_bundle = None
+        if bundle is None:
+            self.reset_transients(target_time=0.0, clear_track_scope=True)
+            return
+
+        self.dynamics_bundle = bundle
+        self.analytical_field = AnalyticalPESField()
+
+        if hasattr(bundle, "track_seed") and bundle.track_seed and self.global_features is not None:
+            from .themes import Theme
+            self.theme = Theme(name=f"dna_s{bundle.track_seed}", features=self.global_features, track_seed=bundle.track_seed)
+
+        self.reset_transients(target_time=0.0, clear_track_scope=False)
 
     def load_track_features(self, global_features: GlobalFeatureSet):
-        """Load global features and create theme."""
+        """Load global features and create theme. If features is None, clear track scope."""
+        if global_features is None:
+            self.reset_transients(target_time=0.0, clear_track_scope=True)
+            return
+
         self.global_features = global_features
-        self.theme = create_theme_from_features(global_features)
-        self.ring_layer.ring_count = self.theme.ring_count
+        seed = self.dynamics_bundle.track_seed if (self.dynamics_bundle is not None and hasattr(self.dynamics_bundle, "track_seed")) else 0
+        self.theme = create_theme_from_features(global_features, track_seed=seed)
+        self.reset_transients(target_time=0.0, clear_track_scope=False)
 
     def update(self, frame: FeatureFrame, is_playing: bool, width: float, height: float, dt: float = 0.016):
         """Public update interface for scene rendering."""
@@ -188,7 +279,7 @@ class Scene:
 
         # Handle seeking backwards (disabled during warmup loops)
         if detect_seek and frame.time < self.time - 0.5:
-            self.seek_to(frame.time, width=width, height=height)
+            self.seek_interactive(frame.time, width=width, height=height)
 
         # Keep time perfectly synced to the audio feature frame time
         self.time = frame.time
@@ -255,11 +346,7 @@ class Scene:
         prev_t = getattr(self, "last_time_processed", max(0.0, self.time - dt))
         self.last_time_processed = self.time
 
-        track_seed = (
-            self.dynamics_bundle.track_seed
-            if self.dynamics_bundle is not None and hasattr(self.dynamics_bundle, "track_seed")
-            else 42
-        )
+        track_seed = self.get_track_seed()
         sim_tick = int(round(self.time * 60.0))
 
         beat_event_triggered = False
@@ -279,6 +366,9 @@ class Scene:
                 self.is_on_beat = True
             else:
                 self.is_on_beat = False
+                self.beat_strength *= 0.85 ** (dt * 60.0)
+                if self.beat_strength < 0.01:
+                    self.beat_strength = 0.0
 
             if crossed["onset"] > 0.45 and (self.time - self.last_beat_time) > 0.15:
                 onset_event_triggered = True
@@ -331,20 +421,28 @@ class Scene:
         if hf_trigger > 0.16:
             self.effects.trigger_high_frequency(min(1.0, hf_trigger))
 
-        # Background particles emission (dt-aware & keyed deterministic)
-        if self.particles.get_count() < self.particles.max_particles:
-            emit_drive = rms * 0.46 + high * 0.38 + self.effects.beat_flash * 0.15
-            p_emit = 1.0 - math.exp(-25.0 * emit_drive * max(0.001, dt))
-            u_emit = deterministic_float(track_seed, "ambient_emit", sim_tick, 0)
-            if u_emit < p_emit:
-                angle = deterministic_float(track_seed, "ambient_angle", sim_tick, 0) * math.pi * 2
-                radius = self.energy_core.size * 0.6
-                self.particles.emit(
-                    center_x + math.cos(angle) * radius,
-                    center_y + math.sin(angle) * radius,
-                    int(2 + emit_drive * 10), self.theme.hue_base if self.theme else 200,
-                    chaos, energy, type="normal", track_seed=track_seed,
-                )
+        # Background particles emission (slot range loop for 30/60/120 FPS invariance)
+        curr_slot = int(math.floor(self.time * 60.0))
+        last_slot = getattr(self, "_last_ambient_sim_slot", -1)
+        if last_slot < 0:
+            last_slot = curr_slot - 1
+
+        for slot in range(last_slot + 1, curr_slot + 1):
+            self._last_ambient_sim_slot = slot
+            if self.particles.get_count() < self.particles.max_particles:
+                emit_drive = rms * 0.46 + high * 0.38 + self.effects.beat_flash * 0.15
+                sim_dt = 1.0 / 60.0
+                p_emit = 1.0 - math.exp(-25.0 * emit_drive * sim_dt)
+                u_emit = deterministic_float(track_seed, "ambient_emit", slot, 0)
+                if u_emit < p_emit:
+                    angle = deterministic_float(track_seed, "ambient_angle", slot, 0) * math.pi * 2
+                    radius = self.energy_core.size * 0.6
+                    self.particles.emit(
+                        center_x + math.cos(angle) * radius,
+                        center_y + math.sin(angle) * radius,
+                        int(2 + emit_drive * 10), self.theme.hue_base if self.theme else 200,
+                        chaos, energy, type="normal", track_seed=track_seed,
+                    )
 
         # Legacy fallback if no V2 dynamics bundle attached
         if self.dynamics_bundle is None:
@@ -393,29 +491,3 @@ class Scene:
         cx = width / 2 + self.effects.camera_shake_x
         cy = height / 2 + self.effects.camera_shake_y
         return (cx, cy)
-
-    def reset(self):
-        """Reset the scene."""
-        self.theme = None
-        self.global_features = None
-        self.current_frame = None
-        self.is_on_beat = False
-        self.beat_strength = 0.0
-        self.time = 0.0
-        self.vortex_angle = 0.0
-        self.last_onset_time = 0.0
-        self.last_beat_time = 0.0
-        self.last_update_center = (0.0, 0.0)
-        for key in list(self.audio_drive.keys()):
-            self.audio_drive[key] = 0.0
-        self.particles.clear()
-        self.effects = EffectState()
-        self.ring_layer = RingLayer(ring_count=5)
-        self.energy_core = EnergyCore()
-        self.phase_engine = PhaseEngine()
-        self.pes_field = PESField()
-        self.phase_state = None
-        self.dynamics_bundle = None
-        self.analytical_field = AnalyticalPESField()
-        self.current_material_state = None
-        self.current_context = None

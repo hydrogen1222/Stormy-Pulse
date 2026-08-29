@@ -35,7 +35,7 @@ class Particle:
 class ParticleSystem:
     """Manages particles for visualization with Scientific Precision."""
 
-    def __init__(self, max_particles: int = 3000): 
+    def __init__(self, max_particles: int = 3000):
         self.max_particles = max_particles
         self.particles: List[Particle] = []
         self.next_particle_id = 0
@@ -58,8 +58,11 @@ class ParticleSystem:
         track_seed: int = 42,
     ):
         """Emit particles at a position with deterministic pseudo-random properties."""
-        count = int(max(1, count * 1.35))
-        for idx in range(count):
+        if count <= 0 or len(self.particles) >= self.max_particles:
+            return
+
+        requested = min(int(count), self.max_particles - len(self.particles))
+        for idx in range(requested):
             if len(self.particles) >= self.max_particles:
                 break
 
@@ -131,8 +134,14 @@ class ParticleSystem:
         track_seed: int = 42,
     ):
         """Emit a refined radial burst of data-point particles deterministically."""
-        count = int(max(1, count * 1.6))
-        for i in range(count):
+        if count <= 0 or len(self.particles) >= self.max_particles:
+            return
+
+        requested = min(int(count), self.max_particles - len(self.particles))
+        for i in range(requested):
+            if len(self.particles) >= self.max_particles:
+                break
+
             pid = self.next_particle_id
             self.next_particle_id += 1
 
@@ -142,7 +151,7 @@ class ParticleSystem:
             r_hue = deterministic_signed(track_seed, "burst_hue", pid, i, scale=20.0)
             r_size = deterministic_float(track_seed, "burst_size", pid, i)
 
-            angle = (i / count) * math.pi * 2 + r_angle
+            angle = (i / max(1, requested)) * math.pi * 2 + r_angle
             speed = (9 + beat_strength * 18 + energy * 7 + r_speed * 7) * (1 + chaos * 0.6)
             life = 15 + r_life * 25
             hue = hue_base + r_hue

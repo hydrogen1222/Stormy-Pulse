@@ -169,21 +169,90 @@ class PlayerControls(QWidget):
 
         layout.addLayout(controls_layout)
 
-    def _button_style(self, color="#4c4c8c"):
+    def set_theme(self, theme_name: str = "dark"):
+        """Apply theme (dark/light) to player controls UI."""
+        self._current_theme = theme_name
+        is_light = (theme_name == "light")
+        lbl_color = "#334155" if is_light else "#8888aa"
+        groove_bg = "#e2e8f0" if is_light else "#1a1a2e"
+        groove_border = "#cbd5e1" if is_light else "#3d3d5c"
+        subpage_bg = "#6366f1" if is_light else "#4c4c8c"
+        btn_default = "#cbd5e1" if is_light else "#4c4c8c"
+        btn_fg = "#0f172a" if is_light else "#ffffff"
+
+        self.time_label.setStyleSheet(f"color: {lbl_color};")
+        self.duration_label.setStyleSheet(f"color: {lbl_color};")
+
+        slider_qss = f"""
+            QSlider::groove:horizontal {{
+                border: 1px solid {groove_border};
+                height: 6px;
+                border-radius: 3px;
+                background: {groove_bg};
+            }}
+            QSlider::handle:horizontal {{
+                background: #6366f1;
+                width: 14px;
+                margin: -4px 0;
+                border-radius: 7px;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: #4f46e5;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {subpage_bg};
+                border-radius: 3px;
+            }}
+        """
+        self.progress_slider.setStyleSheet(slider_qss)
+
+        vol_qss = f"""
+            QSlider::groove:horizontal {{
+                border: 1px solid {groove_border};
+                height: 4px;
+                border-radius: 2px;
+                background: {groove_bg};
+            }}
+            QSlider::handle:horizontal {{
+                background: #6366f1;
+                width: 10px;
+                margin: -3px 0;
+                border-radius: 5px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {subpage_bg};
+                border-radius: 2px;
+            }}
+        """
+        self.volume_slider.setStyleSheet(vol_qss)
+
+        self.prev_button.setStyleSheet(self._button_style(btn_default, btn_fg))
+        self.stop_button.setStyleSheet(self._button_style(btn_default, btn_fg))
+        self.next_button.setStyleSheet(self._button_style(btn_default, btn_fg))
+        self.play_button.setStyleSheet(self._button_style("#6366f1", "#ffffff"))
+        self.settings_button.setStyleSheet(self._button_style("#94a3b8" if is_light else "#2d2d44", btn_fg))
+        self.export_button.setStyleSheet(self._button_style("#64748b" if is_light else "#304058", "#ffffff"))
+
+    def _button_style(self, color="#4c4c8c", fg="white"):
         """Get button style."""
+        is_light = getattr(self, "_current_theme", "dark") == "light"
+        hover_bg = "#4f46e5" if is_light else "#8888ff"
+        pressed_bg = "#4338ca" if is_light else "#3c3c9c"
         return f"""
             QPushButton {{
                 background: {color};
-                color: white;
+                color: {fg};
                 border: none;
                 border-radius: 20px;
                 font-size: 16px;
             }}
             QPushButton:hover {{
-                background: #8888ff;
+                background: {hover_bg};
+                color: #ffffff;
             }}
             QPushButton:pressed {{
-                background: #3c3c9c;
+                background: {pressed_bg};
+                color: #ffffff;
             }}
         """
 

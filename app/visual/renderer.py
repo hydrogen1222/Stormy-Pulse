@@ -18,6 +18,7 @@ from PySide6.QtGui import (
     QPainter,
     QPainterPath,
     QPen,
+    QPolygonF,
     QRawFont,
     QRadialGradient,
 )
@@ -114,15 +115,15 @@ class VisualizerRenderer(QWidget):
             self._paint_count = 0
             self._last_print_time = now
 
-    def set_track_info(self, title: str, artist: str, fingerprint: str = ""):
+    def set_track_info(self, title: str, artist: str, fingerprint: str = "", file_hash: str = ""):
         self.track_title = _normalize_text(title) or "Unknown Track"
         self.track_artist = _normalize_text(artist) or "Unknown Artist"
         self.title_alpha = 0.0
         self._typography_cache_key = None
         
-        # Use song's unique fingerprint to seed all visual randomness statelessly
-        seed_source = fingerprint if fingerprint else f"{title}_{artist}"
-        t_seed = deterministic_hash_uint64(0, seed_source, 0)
+        from ..dynamics.deterministic import canonical_track_seed
+        seed_source = file_hash if file_hash else (fingerprint if fingerprint else f"{title}_{artist}")
+        t_seed = canonical_track_seed(seed_source)
         self._grain_points = [
             (
                 deterministic_float(t_seed, "grain_x", 0, i),
@@ -159,6 +160,10 @@ class VisualizerRenderer(QWidget):
         self._layout_cache_value = {}
         self._typography_cache_key = None
         self._typography_cache_value = {}
+
+    def reset_hud_smoothing(self):
+        """Reset cross-render HUD envelope smoothing (used for deterministic stills)."""
+        self._hud_smooth = {"BASS": 0.0, "RMS": 0.0, "BEAT": 0.0}
 
     def reset(self):
         self.scene.reset()
@@ -212,6 +217,8 @@ class VisualizerRenderer(QWidget):
 
         hud_scale = _clamp(settings.get("hud_scale", 1.0), 0.7, 1.5)
         show_title = settings.get("show_track_title", True)
+        show_artist = settings.get("show_track_artist", True)
+        show_top_info = show_title or show_artist
         show_left_hud = settings.get("show_left_hud", True)
         show_right_hud = settings.get("show_right_hud", True)
         show_lyrics = settings.get("show_lyrics", False)
@@ -219,7 +226,7 @@ class VisualizerRenderer(QWidget):
             width,
             height,
             hud_scale,
-            show_title,
+            show_top_info,
             show_left_hud,
             show_right_hud,
             show_lyrics,
@@ -245,6 +252,8 @@ class VisualizerRenderer(QWidget):
     def _layout_settings_signature(self) -> tuple:
         keys = (
             "visual_canvas_ratio",
+            "show_track_title",
+            "show_track_artist",
             "layout_title_x",
             "layout_title_y",
             "layout_artist_x",
@@ -256,6 +265,7 @@ class VisualizerRenderer(QWidget):
             "layout_right_hud_x",
             "layout_right_hud_y",
             "module_scale_title",
+            "module_scale_artist",
             "module_scale_lyrics",
             "module_scale_left_hud",
             "module_scale_right_hud",
@@ -474,11 +484,21 @@ class VisualizerRenderer(QWidget):
             int((fog_color.blue() + title_color.blue()) / 2),
             grain_alpha,
         )
+
+        if (
+            not hasattr(self, "_cached_grain_size")
+            or self._cached_grain_size != (width, height)
+            or getattr(self, "_cached_grain_points_id", None) != id(self._grain_points)
+        ):
+            pts = [QPointF(nx * width, ny * height) for nx, ny, strength in self._grain_points if strength > 0.48]
+            self._cached_grain_polygon = QPolygonF(pts)
+            self._cached_grain_size = (width, height)
+            self._cached_grain_points_id = id(self._grain_points)
+
         painter.save()
         painter.setPen(grain_color)
-        for nx, ny, strength in self._grain_points:
-            if strength > 0.48:
-                painter.drawPoint(QPointF(nx * width, ny * height))
+        if hasattr(self, "_cached_grain_polygon") and self._cached_grain_polygon is not None:
+            painter.drawPoints(self._cached_grain_polygon)
         painter.restore()
 
     def _safe_base(self, width: float, height: float) -> float:
@@ -501,6 +521,16 @@ class VisualizerRenderer(QWidget):
         core = self.scene.energy_core.get_state()
         base = self._safe_base(width, height)
         safe_radius = self._safe_radius(width, height)
+
+        if theme and hasattr(theme, "draw_plan") and not theme.draw_plan.show_optical_core:
+            if theme.draw_plan.structure_type == "vortex":
+                self._draw_vortex_eye_core(painter, cx, cy, width, height, core)
+                return
+            elif theme.draw_plan.structure_type == "organic":
+                return
+            elif theme.draw_plan.structure_type == "reactor":
+                return
+            return
 
         r, g, b, _ = theme.get_color(role="foreground_primary", alpha=1.0)
         base_color = QColor(r, g, b)
@@ -598,6 +628,60 @@ class VisualizerRenderer(QWidget):
 
         painter.restore()
 
+    def _draw_vortex_eye_core(self, painter: QPainter, cx: float, cy: float, width: float, height: float, core: dict):
+        """Vortex archetype core: central dark vortex eye with spinning accretion ring."""
+        theme = self.scene.theme
+        base = self._safe_base(width, height)
+        safe_radius = self._safe_radius(width, height)
+        r, g, b, _ = theme.get_color(role="accent", alpha=1.0)
+
+        r_eye = _clamp(core["size"] * 0.75, base * 0.04, safe_radius * 0.35)
+
+        painter.save()
+        # Accretion ring
+        acc_grad = QRadialGradient(cx, cy, r_eye * 1.5)
+        acc_grad.setColorAt(0.0, QColor(0, 0, 0, 240))
+        acc_grad.setColorAt(0.5, QColor(r, g, b, int(180 * core["brightness"])))
+        acc_grad.setColorAt(1.0, QColor(0, 0, 0, 0))
+        painter.setBrush(QBrush(acc_grad))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawEllipse(QPointF(cx, cy), r_eye * 1.5, r_eye * 1.5)
+
+        # Dark vortex eye void
+        painter.setBrush(QColor(8, 12, 22, 230))
+        painter.setPen(_make_round_pen(QColor(r, g, b, 200), max(base * 0.0015, 1.2)))
+        painter.drawEllipse(QPointF(cx, cy), r_eye * 0.6, r_eye * 0.6)
+        painter.restore()
+
+    def _draw_organic_cell_core(self, painter: QPainter, cx: float, cy: float, width: float, height: float, core: dict):
+        """Organic archetype core: asymmetric fluid cell nucleus membrane."""
+        theme = self.scene.theme
+        base = self._safe_base(width, height)
+        safe_radius = self._safe_radius(width, height)
+        r, g, b, _ = theme.get_color(role="foreground_primary", alpha=1.0)
+        r_a, g_a, b_a, _ = theme.get_color(role="accent", alpha=1.0)
+
+        r_cell = _clamp(core["size"] * 0.85, base * 0.05, safe_radius * 0.40)
+        path = QPainterPath()
+        pts = 24
+        for i in range(pts + 1):
+            t = i / float(pts)
+            angle = t * math.pi * 2
+            dr = math.sin(angle * 3.0 + self.scene.time * 2.5) * r_cell * 0.18 + math.cos(angle * 5.0 - self.scene.time * 1.8) * r_cell * 0.10
+            rr = r_cell + dr
+            x = cx + math.cos(angle) * rr
+            y = cy + math.sin(angle) * rr * 0.90
+            if i == 0:
+                path.moveTo(x, y)
+            else:
+                path.lineTo(x, y)
+
+        painter.save()
+        painter.setBrush(QColor(r, g, b, int(45 * core["brightness"])))
+        painter.setPen(_make_round_pen(QColor(r_a, g_a, b_a, int(210 * core["brightness"])), max(base * 0.0018, 1.4)))
+        painter.drawPath(path)
+        painter.restore()
+
     def _draw_generative_structure(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
@@ -615,50 +699,50 @@ class VisualizerRenderer(QWidget):
     def _draw_structure_reactor(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
-        """Heavy fragmented shell style continuously morphed by GeometryControl."""
+        """Heavy polygon reactor core and orbital polygon lattice style."""
         dna = self.scene.theme
         base = self._safe_base(width, height)
-        max_radius = self._safe_radius(width, height) * 0.96
-        geom = getattr(self.scene, "current_geometry_control", None)
-        mat = getattr(self.scene, "current_material_state", None)
+        safe_radius = self._safe_radius(width, height)
+        sides = getattr(dna.draw_plan, "polygon_sides", 6)
 
-        symmetry = geom.symmetry if geom is not None else 0.5
-        circulation = geom.circulation if geom is not None else 0.2
-        fragmentation = geom.fragmentation if geom is not None else 0.1
-        roughness = geom.roughness if geom is not None else 0.0
-        defect_density = mat.defect_density if mat is not None else 0.0
+        r_p, g_p, b_p, _ = dna.get_color(role="foreground_primary", alpha=1.0)
+        r_a, g_a, b_a, _ = dna.get_color(role="accent", alpha=1.0)
 
-        for i in range(dna.ring_count):
-            data = self.scene.ring_layer.get_ring_data(i)
-            radius = data["radius"] * max_radius
-            if radius < base * 0.014:
-                continue
+        # 1. Main Polygon Reactor Core (occupying 0.22 - 0.35 of safe_radius)
+        r_core = safe_radius * 0.28
+        poly_core = QPainterPath()
+        for s in range(sides + 1):
+            angle = s * (2.0 * math.pi / sides) + self.scene.vortex_angle * 0.4
+            rr = r_core * (1.0 + 0.08 * math.sin(self.scene.time * 3.0 + s * 2.0))
+            x = cx + math.cos(angle) * rr
+            y = cy + math.sin(angle) * rr
+            if s == 0:
+                poly_core.moveTo(x, y)
+            else:
+                poly_core.lineTo(x, y)
 
-            if roughness > 0.05:
-                radius += math.sin(self.scene.time * 5.0 + i * 2.0) * base * 0.015 * roughness
+        painter.save()
+        painter.setBrush(QColor(r_p, g_p, b_p, 65))
+        painter.setPen(_make_round_pen(QColor(r_a, g_a, b_a, 220), max(base * 0.0025, 2.0)))
+        painter.drawPath(poly_core)
 
-            role = "primary" if i % 2 == 0 else "secondary"
-            color = QColor(*dna.get_color(role=role, alpha=0.78))
-            pen_w = max(base * 0.0012, data["thickness"] * 0.12)
-            pen = _make_round_pen(color, pen_w)
-            painter.setPen(pen)
+        # 2. Orbital Polygon Lattice Shells
+        for ring_idx in range(1, 4):
+            r_orbit = r_core * (1.0 + ring_idx * 0.55)
+            poly_orbit = QPainterPath()
+            rot_dir = 1.0 if ring_idx % 2 == 0 else -1.0
+            for s in range(sides + 1):
+                angle = s * (2.0 * math.pi / sides) + self.scene.vortex_angle * 0.2 * rot_dir
+                x = cx + math.cos(angle) * r_orbit
+                y = cy + math.sin(angle) * r_orbit
+                if s == 0:
+                    poly_orbit.moveTo(x, y)
+                else:
+                    poly_orbit.lineTo(x, y)
+            painter.setPen(_make_round_pen(QColor(r_p, g_p, b_p, int(110 / ring_idx)), max(base * 0.0014, 1.2)))
+            painter.drawPath(poly_orbit)
 
-            rect = QRectF(cx - radius, cy - radius, radius * 2, radius * 2)
-            rot = math.degrees(data["rotation"] * (1.0 + i * (0.18 + circulation * 0.40)))
-            seg_a = (18 + data["radius"] * 28) * (0.6 + 0.8 * symmetry) * (1.0 - 0.5 * fragmentation)
-            seg_b = (14 + data["radius"] * 22) * (0.6 + 0.8 * symmetry) * (1.0 - 0.5 * fragmentation)
-
-            # Skip drawing if fragmented defect is high
-            if data.get("broken", False) or (fragmentation + defect_density > 1.2 and i % 3 == 0):
-                seg_a *= 0.3
-                seg_b *= 0.3
-
-            painter.drawArc(rect, int(rot * 16), int(seg_a * 16))
-            painter.drawArc(rect, int((rot + 180) * 16), int(seg_b * 16))
-
-            if dna.detail_style == "spikes" and i % 2 == 0:
-                acc = QColor(*dna.get_color(role="accent", alpha=0.80))
-                self._draw_attachment_spikes(painter, cx, cy, radius, rot, acc, base)
+        painter.restore()
 
     def _draw_structure_vortex(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
@@ -676,6 +760,7 @@ class VisualizerRenderer(QWidget):
 
         for i in range(dna.ring_count):
             data = self.scene.ring_layer.get_ring_data(i)
+            r_band_base = (0.18 + (i / max(1.0, float(dna.ring_count - 1))) * 0.72) * max_radius
             path = QPainterPath()
             role = "primary" if i % 2 == 0 else "secondary"
             color = QColor(*dna.get_color(role=role, alpha=0.60))
@@ -685,8 +770,8 @@ class VisualizerRenderer(QWidget):
                 spiral_twist = (1.0 + 2.5 * circulation)
                 angle = t * math.pi * 2 * spiral_twist + data["rotation"] * (1.0 + i * 0.10)
                 lobes = max(2, int(round(3 * symmetry)))
-                r_noise = math.sin(angle * lobes + self.scene.time * 2.1) * (data["radius"] * max_radius * (0.05 + roughness * 0.08))
-                r = (data["radius"] * max_radius) * (0.90 + t * 0.20) + r_noise
+                r_noise = math.sin(angle * lobes + self.scene.time * 2.1) * (r_band_base * (0.05 + roughness * 0.08))
+                r = r_band_base * (0.90 + t * 0.20) + r_noise
                 x = cx + math.cos(angle) * r
                 y = cy + math.sin(angle) * r
                 if j == 0:
@@ -740,40 +825,56 @@ class VisualizerRenderer(QWidget):
     def _draw_structure_organic(
         self, painter: QPainter, cx: float, cy: float, width: float, height: float
     ):
-        """Wobbly organic ring style continuously morphed by GeometryControl."""
+        """Asymmetric organic cell clusters and fluid membranes occupying > 40% of canvas area."""
         dna = self.scene.theme
         base = self._safe_base(width, height)
-        max_radius = self._safe_radius(width, height) * 0.88
-        geom = getattr(self.scene, "current_geometry_control", None)
+        safe_radius = self._safe_radius(width, height)
 
-        symmetry = geom.symmetry if geom is not None else 0.5
-        coherence = geom.coherence if geom is not None else 0.5
-        roughness = geom.roughness if geom is not None else 0.1
+        r_p, g_p, b_p, _ = dna.get_color(role="foreground_primary", alpha=1.0)
+        r_a, g_a, b_a, _ = dna.get_color(role="accent", alpha=1.0)
 
-        for i in range(dna.ring_count):
-            data = self.scene.ring_layer.get_ring_data(i)
-            radius = data["radius"] * max_radius
-            role = "primary" if i % 2 == 0 else "secondary"
-            color = QColor(*dna.get_color(role=role, alpha=0.60))
+        painter.save()
+        # 1. Large Asymmetric Fluid Outer Membrane (occupying 45-65% safe_radius)
+        r_mem = safe_radius * 0.55
+        mem_path = QPainterPath()
+        pts = 36
+        for i in range(pts + 1):
+            t = i / float(pts)
+            angle = t * math.pi * 2
+            dr = math.sin(angle * 2.0 + self.scene.time * 1.5) * r_mem * 0.22 + math.cos(angle * 4.0 - self.scene.time * 1.1) * r_mem * 0.12
+            rr = r_mem + dr
+            x = cx + math.cos(angle) * rr + math.cos(self.scene.time * 0.8) * base * 0.04
+            y = cy + math.sin(angle) * rr * 0.85 + math.sin(self.scene.time * 0.6) * base * 0.04
+            if i == 0:
+                mem_path.moveTo(x, y)
+            else:
+                mem_path.lineTo(x, y)
 
-            path = QPainterPath()
-            pts = int(84 * (0.6 + 0.8 * coherence))
-            lobes = max(3, int(round(4 * symmetry)))
-            for j in range(pts + 1):
-                angle = (j / max(1.0, float(pts))) * math.pi * 2
-                wobble_1 = math.sin(angle * lobes + self.scene.time * 3.0) * (base * (0.012 + roughness * 0.020))
-                wobble_2 = math.cos(angle * (lobes + 3) - self.scene.time * 2.0) * (base * (0.008 + roughness * 0.015))
-                r = radius + (wobble_1 + wobble_2) * data["radius"]
-                x = cx + math.cos(angle + data["rotation"]) * r
-                y = cy + math.sin(angle + data["rotation"]) * r
-                if j == 0:
-                    path.moveTo(x, y)
+        painter.setBrush(QColor(r_p, g_p, b_p, 45))
+        painter.setPen(_make_round_pen(QColor(r_a, g_a, b_a, 160), max(base * 0.0016, 1.4)))
+        painter.drawPath(mem_path)
+
+        # 2. Off-center Organic Cell Clusters (3-5 cells)
+        cluster_offsets = [(0.18, 0.12), (-0.22, 0.15), (0.15, -0.25), (-0.14, -0.18)]
+        for idx, (ox, oy) in enumerate(cluster_offsets):
+            cell_cx = cx + ox * safe_radius * 1.2
+            cell_cy = cy + oy * safe_radius * 1.2
+            r_c = safe_radius * (0.12 + 0.03 * math.sin(self.scene.time * 2.0 + idx))
+            cell_path = QPainterPath()
+            for s in range(20 + 1):
+                angle = (s / 20.0) * math.pi * 2
+                rr = r_c * (1.0 + 0.15 * math.sin(angle * 3.0 + self.scene.time * 2.0))
+                x = cell_cx + math.cos(angle) * rr
+                y = cell_cy + math.sin(angle) * rr
+                if s == 0:
+                    cell_path.moveTo(x, y)
                 else:
-                    path.lineTo(x, y)
+                    cell_path.lineTo(x, y)
+            painter.setBrush(QColor(r_a, g_a, b_a, 35))
+            painter.setPen(_make_round_pen(QColor(r_p, g_p, b_p, 140), max(base * 0.0012, 1.0)))
+            painter.drawPath(cell_path)
 
-            path.closeSubpath()
-            painter.setPen(_make_round_pen(color, max(base * 0.0011, data["thickness"] * 0.07)))
-            painter.drawPath(path)
+        painter.restore()
 
     def _draw_attachment_spikes(
         self,
@@ -799,7 +900,6 @@ class VisualizerRenderer(QWidget):
     def _draw_atmosphere_layer(
         self, painter: QPainter, width: float, height: float, cx: float, cy: float
     ):
-        """Atmosphere layer: moving vortex traces + sparse high-frequency sparks."""
         theme = self.scene.theme
         frame = self.scene.current_frame
         rms = frame.rms if frame else 0.05
@@ -807,26 +907,46 @@ class VisualizerRenderer(QWidget):
         chaos = self.scene.global_features.chaos if self.scene.global_features else 0.3
         effects = self.scene.effects
         base = self._safe_base(width, height)
-
-        arm_count = 4 + int(chaos * 4)
         max_radius = self._safe_radius(width, height) * 0.96
 
+        show_vortex = getattr(theme.draw_plan, "show_vortex_atmosphere", True) if hasattr(theme, "draw_plan") else True
         r_base, g_base, b_base, _ = theme.get_color(role="foreground_secondary", alpha=1.0)
-        for arm in range(arm_count):
-            path = QPainterPath()
-            for i in range(40):
-                t = i / 39.0
-                angle = t * math.pi * 2.9 + arm * (math.pi * 2 / arm_count) + self.scene.vortex_angle
-                radius = t * max_radius * (1.08 - rms * 0.25)
-                x = cx + math.cos(angle) * radius
-                y = cy + math.sin(angle) * radius * 0.60
-                if i == 0:
-                    path.moveTo(x, y)
-                else:
-                    path.lineTo(x, y)
-            alpha = int(14 + rms * 26)
-            painter.setPen(_make_round_pen(QColor(r_base, g_base, b_base, alpha), max(base * 0.0012, 1.0)))
-            painter.drawPath(path)
+
+        if show_vortex:
+            arm_count = getattr(theme.draw_plan, "arm_count", 4 + int(chaos * 4)) if hasattr(theme, "draw_plan") else 4 + int(chaos * 4)
+            for arm in range(arm_count):
+                path = QPainterPath()
+                for i in range(40):
+                    t = i / 39.0
+                    angle = t * math.pi * 2.9 + arm * (math.pi * 2 / arm_count) + self.scene.vortex_angle
+                    radius = t * max_radius * (1.08 - rms * 0.25)
+                    x = cx + math.cos(angle) * radius
+                    y = cy + math.sin(angle) * radius * 0.60
+                    if i == 0:
+                        path.moveTo(x, y)
+                    else:
+                        path.lineTo(x, y)
+                alpha = int(14 + rms * 26)
+                painter.setPen(_make_round_pen(QColor(r_base, g_base, b_base, alpha), max(base * 0.0012, 1.0)))
+                painter.drawPath(path)
+        else:
+            # Non-vortex outer atmosphere field
+            struct_type = getattr(theme.draw_plan, "structure_type", "pulse") if hasattr(theme, "draw_plan") else "pulse"
+            if struct_type == "pulse":
+                # Radiating concentric acoustic shockwaves
+                for r_idx in range(3, 7):
+                    r_wave = max_radius * (r_idx * 0.15 + (self.scene.time * 0.1) % 0.15)
+                    painter.setPen(_make_round_pen(QColor(r_base, g_base, b_base, 35), max(base * 0.0010, 1.0)))
+                    painter.drawEllipse(QPointF(cx, cy), r_wave, r_wave)
+            elif struct_type == "reactor":
+                # Diamond orbital lattice alignment rays
+                sides = getattr(theme.draw_plan, "polygon_sides", 6)
+                for s in range(sides):
+                    angle = s * (2.0 * math.pi / sides) + self.scene.vortex_angle * 0.3
+                    x2 = cx + math.cos(angle) * max_radius * 0.9
+                    y2 = cy + math.sin(angle) * max_radius * 0.9
+                    painter.setPen(_make_round_pen(QColor(r_base, g_base, b_base, 45), max(base * 0.0014, 1.2)))
+                    painter.drawLine(QPointF(cx, cy), QPointF(x2, y2))
 
         if high > 0.42 or effects.high_energy_flash > 0.10:
             spike_count = int(6 + high * 16)
@@ -857,6 +977,9 @@ class VisualizerRenderer(QWidget):
         """Audio-reactive harmonic shells driven by smoothed multi-band controls."""
         theme = self.scene.theme
         if not theme:
+            return
+
+        if hasattr(theme, "draw_plan") and not theme.draw_plan.show_rings:
             return
 
         drive = self.scene.get_audio_drive()
@@ -988,7 +1111,7 @@ class VisualizerRenderer(QWidget):
         base = self._safe_base(width, height)
         trail_w = max(base * 0.0011, 1.0)
         layout_center = self._layout_state.get("scene_center")
-        if isinstance(layout_center, QPointF):
+        if isinstance(layout_center, QPointF) and self.scene.last_update_center is not None:
             anchor_x, anchor_y = self.scene.last_update_center
             offset_x = layout_center.x() - anchor_x
             offset_y = layout_center.y() - anchor_y
@@ -1717,6 +1840,7 @@ class VisualizerRenderer(QWidget):
         opacity = _clamp(settings.get("hud_opacity", 0.8), 0.2, 1.0)
         scale = _clamp(settings.get("hud_scale", 1.0), 0.7, 1.5)
         show_title = settings.get("show_track_title", True)
+        show_artist = settings.get("show_track_artist", True)
         show_left = settings.get("show_left_hud", True)
         show_right = settings.get("show_right_hud", True)
         show_lyrics = settings.get("show_lyrics", False)
@@ -1724,12 +1848,12 @@ class VisualizerRenderer(QWidget):
 
         metrics = self._layout_state
         if not metrics:
-            metrics = self._get_layout_metrics(width, height, scale, show_title, show_left, show_right, show_lyrics)
+            metrics = self._get_layout_metrics(width, height, scale, show_title or show_artist, show_left, show_right, show_lyrics)
             self._layout_state = metrics
         typography = self._get_typography(width, height)
 
-        if show_title:
-            self._draw_top_title(painter, dna, metrics["title_rect"], typography, opacity)
+        if show_title or show_artist:
+            self._draw_top_title(painter, dna, metrics["title_rect"], typography, opacity, show_title=show_title, show_artist=show_artist)
 
         if metrics.get("lyrics_visible"):
             lyrics_rect = metrics.get("lyrics_rect")
@@ -1749,6 +1873,38 @@ class VisualizerRenderer(QWidget):
                 debug_mode=debug_mode,
             )
 
+        self._draw_standalone_fps_overlay(painter, width, height)
+
+    def _draw_standalone_fps_overlay(self, painter: QPainter, width: float, height: float):
+        """Standalone top-left FPS pill overlay, strictly controlled ONLY by show_fps setting."""
+        if not settings.get("show_fps", True):
+            return
+
+        target_label = "UNLIM" if self.target_fps == 0 else str(self.target_fps)
+        fps_text = f"FPS {self._actual_fps:0.0f} / {target_label}"
+
+        painter.save()
+        font = QFont("Consolas", 9, QFont.Weight.Bold)
+        painter.setFont(font)
+
+        fm = QFontMetrics(font)
+        text_w = fm.horizontalAdvance(fps_text)
+        text_h = fm.height()
+
+        padding_x = 8.0
+        padding_y = 4.0
+        pill_w = text_w + padding_x * 2.0
+        pill_h = text_h + padding_y * 2.0
+        rect = QRectF(16.0, 16.0, pill_w, pill_h)
+
+        painter.setBrush(QColor(15, 23, 42, 200))
+        painter.setPen(QPen(QColor(56, 189, 248, 120), 1.0))
+        painter.drawRoundedRect(rect, 4.0, 4.0)
+
+        painter.setPen(QColor(224, 242, 254))
+        painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, fps_text)
+        painter.restore()
+
     def _draw_top_title(
         self,
         painter: QPainter,
@@ -1756,9 +1912,11 @@ class VisualizerRenderer(QWidget):
         top_rect: QRectF,
         typography: Dict[str, QFont],
         opacity: float,
+        show_title: bool = True,
+        show_artist: bool = True,
     ):
         """Top title with adaptive sizing / truncation and restrained glow."""
-        if not self.track_title or top_rect.height() <= 2:
+        if (not show_title and not show_artist) or top_rect.height() <= 2:
             return
 
         alpha = int(255 * opacity * self.title_alpha)
@@ -1775,48 +1933,80 @@ class VisualizerRenderer(QWidget):
         if block_rect.height() <= 8:
             return
 
+        # Top title text is drawn seamlessly with soft glow/shadow without sharp card borders
         inner_rect = block_rect.adjusted(
             block_rect.width() * 0.06,
             block_rect.height() * 0.12,
             -block_rect.width() * 0.06,
             -block_rect.height() * 0.10,
         )
-        title_rect = QRectF(
-            inner_rect.left(),
-            inner_rect.top(),
-            inner_rect.width(),
-            inner_rect.height() * 0.58,
-        )
-        max_text_w = title_rect.width()
-        title_text = _normalize_text(self.track_title)
-        title_font = self._fit_font_to_rect(
-            title_text,
-            typography["title"],
-            max_text_w,
-            title_rect.height() * 0.92,
-            max(12.0 if is_vertical else 13.0, typography["title"].pointSizeF() * 0.56),
-        )
-        title_text = self._elide_text(title_text, title_font, max_text_w)
-        shadow_offset = max(block_rect.height() * 0.010, 1.0)
-        self._draw_glow_text(
-            painter=painter,
-            text=title_text,
-            rect=title_rect,
-            align=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
-            font=title_font,
-            color=QColor(title_r, title_g, title_b, alpha),
-            glow=QColor(title_r, title_g, title_b, int(alpha * 0.36)),
-            shadow_offset=shadow_offset,
-        )
 
-        if self.track_artist:
-            artist_text = _normalize_text(self.track_artist)
-            artist_rect = QRectF(
-                inner_rect.left(),
-                inner_rect.top() + inner_rect.height() * 0.62,
-                inner_rect.width(),
-                inner_rect.height() * 0.30,
+        has_title = bool(show_title and self.track_title)
+        has_artist = bool(show_artist and self.track_artist)
+
+        canvas_rect = self._layout_state.get("canvas_rect")
+        shadow_offset = max(block_rect.height() * 0.010, 1.0)
+
+        if has_title:
+            if not has_artist:
+                title_rect = QRectF(
+                    inner_rect.left(),
+                    inner_rect.top() + inner_rect.height() * 0.1,
+                    inner_rect.width(),
+                    inner_rect.height() * 0.8,
+                )
+            else:
+                title_rect = QRectF(
+                    inner_rect.left(),
+                    inner_rect.top(),
+                    inner_rect.width(),
+                    inner_rect.height() * 0.58,
+                )
+            if isinstance(canvas_rect, QRectF):
+                title_dx, title_dy = self._module_offset("title", canvas_rect)
+                title_rect = self._shift_rect_clamped(title_rect, canvas_rect, title_dx, title_dy)
+
+            max_text_w = title_rect.width()
+            title_text = _normalize_text(self.track_title)
+            title_font = self._fit_font_to_rect(
+                title_text,
+                typography["title"],
+                max_text_w,
+                title_rect.height() * 0.92,
+                max(12.0 if is_vertical else 13.0, typography["title"].pointSizeF() * 0.56),
             )
+            title_text = self._elide_text(title_text, title_font, max_text_w)
+            self._draw_glow_text(
+                painter=painter,
+                text=title_text,
+                rect=title_rect,
+                align=Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter,
+                font=title_font,
+                color=QColor(title_r, title_g, title_b, alpha),
+                glow=QColor(title_r, title_g, title_b, int(alpha * 0.36)),
+                shadow_offset=shadow_offset,
+            )
+
+        if has_artist:
+            artist_text = _normalize_text(self.track_artist)
+            if not has_title:
+                artist_rect = QRectF(
+                    inner_rect.left(),
+                    inner_rect.top() + inner_rect.height() * 0.15,
+                    inner_rect.width(),
+                    inner_rect.height() * 0.7,
+                )
+            else:
+                artist_rect = QRectF(
+                    inner_rect.left(),
+                    inner_rect.top() + inner_rect.height() * 0.62,
+                    inner_rect.width(),
+                    inner_rect.height() * 0.30,
+                )
+            if isinstance(canvas_rect, QRectF):
+                artist_dx, artist_dy = self._module_offset("artist", canvas_rect)
+                artist_rect = self._shift_rect_clamped(artist_rect, canvas_rect, artist_dx, artist_dy)
+
             artist_font = self._fit_font_to_width(
                 artist_text,
                 typography["subtitle"],
@@ -1831,10 +2021,6 @@ class VisualizerRenderer(QWidget):
                 max(8.0 if is_vertical else 8.5, typography["subtitle"].pointSizeF() * 0.56),
             )
             artist_text = self._elide_text(artist_text, artist_font, artist_rect.width())
-            canvas_rect = self._layout_state.get("canvas_rect")
-            if isinstance(canvas_rect, QRectF):
-                artist_dx, artist_dy = self._module_offset("artist", canvas_rect)
-                artist_rect = self._shift_rect_clamped(artist_rect, canvas_rect, artist_dx, artist_dy)
             self._draw_glow_text(
                 painter=painter,
                 text=artist_text,
@@ -2079,9 +2265,6 @@ class VisualizerRenderer(QWidget):
             ]
             if frame:
                 debug_lines.append(f"RMS {frame.rms:0.2f}  BASS {frame.bass:0.2f}  BEAT {frame.beat_strength:0.2f}")
-            if settings.get("show_fps", True):
-                target_label = "UNLIM" if self.target_fps == 0 else str(self.target_fps)
-                debug_lines.append(f"FPS {self._actual_fps:0.0f} / TARGET {target_label}")
 
             painter.setPen(QColor(hud_r, hud_g, hud_b, int(188 * opacity)))
             y = rect.bottom() + rect.height() * 0.04

@@ -85,8 +85,11 @@ class FrameFeatureSequence:
         # Max for transient
         data[self.F_ONSET_STR] = max(self.features[idx0, self.F_ONSET_STR], self.features[idx1, self.F_ONSET_STR])
 
-        if self.band_shares is not None and len(self.band_shares) > idx0:
-            b_shares = self.band_shares[idx0] * (1 - t) + self.band_shares[idx1] * t
+        if self.band_shares is not None and len(self.band_shares) > 0:
+            b_len = len(self.band_shares)
+            b_idx0 = min(idx0, b_len - 1)
+            b_idx1 = min(idx0 + 1, b_len - 1)
+            b_shares = self.band_shares[b_idx0] * (1 - t) + self.band_shares[b_idx1] * t
         else:
             b_shares = np.full(6, 1.0 / 6.0)
 
@@ -289,12 +292,12 @@ class FeatureCache:
     def beat_positions(self): return self.events.beat_positions
 
     def get_frame_at_time(self, time: float) -> Optional[FeatureFrame]:
-        """Provides the backward-compatible FeatureFrame."""
+        """Provides the backward-compatible FeatureFrame strictly causally."""
         frame_dict = self.frame_seq.get_frame_dict_at_time(time)
         if not frame_dict: return None
         
-        # Get events
-        ev = self.events.get_events_near(time, window=0.08) # 80ms window for visual hit
+        # Get past-only crossed events over recent window (no future leakage)
+        past_ev = self.events.get_events_crossed(max(0.0, time - 0.05), time)
         
         # Combine the 6 bands into the compat 3 bands
         compat_bass = frame_dict["bass"]
@@ -307,12 +310,12 @@ class FeatureCache:
             bass=compat_bass,
             mid=compat_mid,
             high=compat_high,
-            onset_strength=max(frame_dict["onset_strength"], ev["onset"]),
+            onset_strength=frame_dict["onset_strength"],
             spectral_centroid=frame_dict["centroid"],
             spectral_rolloff=frame_dict["rolloff"],
             spectral_flatness=frame_dict["flatness"],
-            beat=1.0 if ev["beat"] > 0 else 0.0,
-            beat_strength=ev["beat"],
+            beat=1.0 if past_ev["beat"] > 0 else 0.0,
+            beat_strength=past_ev["beat"],
             chroma_vector=frame_dict.get("chroma", np.zeros(12)),
             harmonic_e=frame_dict.get("harmonic_e", 0.5),
             percussive_e=frame_dict.get("percussive_e", 0.5),

@@ -1,5 +1,6 @@
 """OpenGL viewport used as the migration target for heavy scene layers."""
 from __future__ import annotations
+import time
 
 from PySide6.QtCore import QPointF
 from PySide6.QtGui import QPainter
@@ -19,7 +20,12 @@ class OpenGLSceneWidget(QOpenGLWidget):
     """
 
     def __init__(self, scene, parent=None):
+        from PySide6.QtGui import QSurfaceFormat
         super().__init__(parent)
+        fmt = QSurfaceFormat()
+        fmt.setSwapInterval(0)
+        self.setFormat(fmt)
+
         self.scene = scene
         self.bridge = VisualizerRenderer()
         self.bridge.hide()
@@ -31,6 +37,7 @@ class OpenGLSceneWidget(QOpenGLWidget):
         self.target_fps = 60
         self.frame_dt = 0.016
         self.setAutoFillBackground(False)
+        self._needs_fbo_check = False
 
     def set_scene(self, scene):
         self.scene = scene
@@ -42,10 +49,10 @@ class OpenGLSceneWidget(QOpenGLWidget):
         self.target_fps = fps
         self.bridge.set_target_fps(fps)
 
-    def set_track_info(self, title: str, artist: str):
+    def set_track_info(self, title: str, artist: str, fingerprint: str = "", file_hash: str = ""):
         self.track_title = title
         self.track_artist = artist
-        self.bridge.set_track_info(title, artist)
+        self.bridge.set_track_info(title, artist, fingerprint=fingerprint, file_hash=file_hash)
 
     def set_lyrics(self, lyrics):
         self.track_lyrics = lyrics
@@ -69,48 +76,51 @@ class OpenGLSceneWidget(QOpenGLWidget):
         self.bridge.stop()
 
     def initializeGL(self):
-        # The actual shader replacement will be implemented in later steps.
         pass
 
     def resizeGL(self, width: int, height: int):
         self.bridge.resize(width, height)
         self.bridge._layout_state = {}
-        # Repaint immediately at the new size so no stale framebuffer content
-        # can linger across the resize.
         self.update()
 
     def showEvent(self, event):
         super().showEvent(event)
-        # Window-state changes (minimize/restore, maximize) can leave the GL
-        # widget showing a stale or partially composited frame; force a full
-        # repaint right after (re)exposure.
         self.update()
 
+    def _record_frame_paint(self, now: float):
+        """Record frame timestamp for rolling actual_fps calculation."""
+        last_t = getattr(self, "_last_gl_time", 0.0)
+        if last_t > 0:
+            dt = now - last_t
+            if not hasattr(self, "_gl_frame_times"):
+                self._gl_frame_times = []
+            self._gl_frame_times.append(dt)
+            if len(self._gl_frame_times) > 30:
+                self._gl_frame_times.pop(0)
+            avg_dt = sum(self._gl_frame_times) / max(1, len(self._gl_frame_times))
+            self.actual_fps = 1.0 / max(1e-6, avg_dt)
+        self._last_gl_time = now
+
     def paintGL(self):
+        self._record_frame_paint(time.perf_counter())
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
-        # NOTE: the default QPainter mapping on a QOpenGLWidget already
-        # applies the device pixel ratio (logical coordinates); do NOT add
-        # viewport/window overrides here - they would double-apply the scale.
         self._render_scene_layers(painter, float(self.width()), float(self.height()), self.frame_dt)
         painter.end()
 
     def check_framebuffer_size(self):
-        """Detect and recover from a stale GL framebuffer size.
-
-        On Windows, window-state changes (minimize/restore, maximize) racing
-        a resize can leave the QOpenGLWidget framebuffer at an older, smaller
-        size than the widget. The widget then shows the correctly laid-out
-        scene clipped at the old framebuffer width, with a pure-black block
-        covering the remaining area. Detect that mismatch and force Qt to
-        recreate the framebuffer via a 1px geometry nudge.
-        """
+        """Detect and recover from a stale GL framebuffer size if size changed."""
         if not self.isVisible():
             return
         dpr = self.devicePixelRatioF()
         expected_w = max(1, int(self.width() * dpr + 0.5))
         expected_h = max(1, int(self.height() * dpr + 0.5))
+        if getattr(self, "_last_checked_w", None) == expected_w and getattr(self, "_last_checked_h", None) == expected_h:
+            return
+        self._last_checked_w = expected_w
+        self._last_checked_h = expected_h
+
         image = self.grabFramebuffer()
         if image.isNull():
             return
@@ -137,6 +147,8 @@ class OpenGLSceneWidget(QOpenGLWidget):
 
         hud_scale = _clamp(settings.get("hud_scale", 1.0), 0.7, 1.5)
         show_title = settings.get("show_track_title", True)
+        show_artist = settings.get("show_track_artist", True)
+        show_top_info = show_title or show_artist
         show_left_hud = settings.get("show_left_hud", True)
         show_right_hud = settings.get("show_right_hud", True)
         show_lyrics = settings.get("show_lyrics", False)
@@ -144,7 +156,7 @@ class OpenGLSceneWidget(QOpenGLWidget):
             width,
             height,
             hud_scale,
-            show_title,
+            show_top_info,
             show_left_hud,
             show_right_hud,
             show_lyrics,

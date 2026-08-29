@@ -38,10 +38,10 @@ class PlaylistPanel(QWidget):
 
         # Header
         header_layout = QHBoxLayout()
-        title = QLabel("播放列表")
-        title.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
-        title.setStyleSheet("color: white;")
-        header_layout.addWidget(title)
+        self.title_label = QLabel("播放列表")
+        self.title_label.setFont(QFont("Microsoft YaHei", 12, QFont.Weight.Bold))
+        self.title_label.setStyleSheet("color: white;")
+        header_layout.addWidget(self.title_label)
         header_layout.addStretch()
 
         self.add_file_btn = QPushButton("+ 文件")
@@ -60,28 +60,6 @@ class PlaylistPanel(QWidget):
 
         # Playlist list
         self.playlist = QListWidget()
-        self.playlist.setStyleSheet("""
-            QListWidget {
-                background: transparent;
-                border: none;
-                color: #ccccdd;
-                outline: none;
-            }
-            QListWidget::item {
-                padding: 10px;
-                border-bottom: 1px solid rgba(60, 60, 90, 60);
-                margin: 2px 8px;
-                border-radius: 6px;
-            }
-            QListWidget::item:selected {
-                background: rgba(108, 108, 255, 100);
-                color: white;
-                border-left: 3px solid #6c6cff;
-            }
-            QListWidget::item:hover {
-                background: rgba(255, 255, 255, 20);
-            }
-        """)
         self.playlist.currentRowChanged.connect(self._on_current_row_changed)
         layout.addWidget(self.playlist)
 
@@ -89,21 +67,66 @@ class PlaylistPanel(QWidget):
         self.count_label = QLabel("0 首歌")
         self.count_label.setStyleSheet("color: #666688; font-size: 11px;")
         layout.addWidget(self.count_label)
+        self.set_theme("dark")
 
-    def _button_style(self):
+    def set_theme(self, theme_name: str = "dark"):
+        """Apply theme (dark/light) to playlist panel UI."""
+        self._current_theme = theme_name
+        is_light = (theme_name == "light")
+        panel_bg = "rgba(248, 250, 252, 0.95)" if is_light else "rgba(15, 15, 30, 150)"
+        panel_border = "1px solid rgba(203, 213, 225, 0.8)" if is_light else "1px solid rgba(80, 80, 120, 80)"
+        title_fg = "#0f172a" if is_light else "#ffffff"
+        item_fg = "#1e293b" if is_light else "#ccccdd"
+        border_b = "rgba(203, 213, 225, 0.6)" if is_light else "rgba(60, 60, 90, 60)"
+        hover_bg = "rgba(0, 0, 0, 0.05)" if is_light else "rgba(255, 255, 255, 20)"
+        btn_bg = "#cbd5e1" if is_light else "#3d3d5c"
+        btn_fg = "#0f172a" if is_light else "#ffffff"
+
+        self.setStyleSheet(f"background: {panel_bg}; border-right: {panel_border};")
+        self.title_label.setStyleSheet(f"color: {title_fg};")
+        self.count_label.setStyleSheet(f"color: {'#64748b' if is_light else '#666688'}; font-size: 11px;")
+
+        self.playlist.setStyleSheet(f"""
+            QListWidget {{
+                background: transparent;
+                border: none;
+                color: {item_fg};
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 10px;
+                border-bottom: 1px solid {border_b};
+                margin: 2px 8px;
+                border-radius: 6px;
+            }}
+            QListWidget::item:selected {{
+                background: rgba(99, 102, 241, 0.85);
+                color: #ffffff;
+                border-left: 3px solid #4f46e5;
+            }}
+            QListWidget::item:hover {{
+                background: {hover_bg};
+            }}
+        """)
+        self.add_file_btn.setStyleSheet(self._button_style(btn_bg, btn_fg))
+        self.add_folder_btn.setStyleSheet(self._button_style(btn_bg, btn_fg))
+
+    def _button_style(self, bg="#3d3d5c", fg="white"):
         """Get button style."""
-        return """
-            QPushButton {
-                background: #3d3d5c;
-                color: white;
+        is_light = getattr(self, "_current_theme", "dark") == "light"
+        hover_bg = "#94a3b8" if is_light else "#4d4d7c"
+        return f"""
+            QPushButton {{
+                background: {bg};
+                color: {fg};
                 border: none;
                 border-radius: 4px;
                 padding: 4px 12px;
                 font-size: 12px;
-            }
-            QPushButton:hover {
-                background: #4d4d7c;
-            }
+            }}
+            QPushButton:hover {{
+                background: {hover_bg};
+            }}
         """
 
     def _on_add_folder(self):

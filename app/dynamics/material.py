@@ -92,9 +92,9 @@ class MaterialStateEngine:
 
         # 2. Defect Creation & Healing Dynamics (Hysteresis & L4 Susceptibility)
         susceptibility = 1.0 + 0.20 * ctx.novelty + 0.15 * ctx.boundary_impulse
-        damage = (0.40 * ctx.onset + 0.30 * ctx.flux + 0.30 * self.excitation) * susceptibility
-        create_rate = 1.8
-        heal_rate = 0.25
+        damage = (0.35 * ctx.onset + 0.30 * ctx.flux + 0.35 * self.excitation) * susceptibility
+        create_rate = 0.85
+        heal_rate = 0.75
 
         d_defect_create = create_rate * damage * (1.0 - self.defect_density) * dt
         d_defect_heal = heal_rate * (1.0 - self.excitation) * (0.3 + 0.7 * ctx.harmonic_ratio) * self.defect_density * dt
@@ -103,7 +103,7 @@ class MaterialStateEngine:
 
         # 3. Order Dynamics (Suppressed by defect_density)
         order_drive = ctx.tonal_confidence * (1.0 - ctx.spectral_noise) * (0.35 + 0.65 * ctx.harmonic_ratio)
-        order_target = order_drive * (1.0 - 0.75 * self.defect_density) if not is_dormant else 0.65
+        order_target = order_drive * (1.0 - 0.40 * self.defect_density) if not is_dormant else 0.75
 
         tau_order = 0.40
         alpha_order = 1.0 - math.exp(-dt / tau_order)
@@ -119,14 +119,14 @@ class MaterialStateEngine:
 
         # 5. Soft Phase Weights Assignment (Continuous softmax distances)
         # Prototypes in (Order, Excitation, Defect) space:
-        # Crys:   (0.85, 0.15, 0.10)
-        # Fluid:  (0.50, 0.50, 0.40)
-        # Plasma: (0.15, 0.95, 0.80)
-        d_crys_sq = 2.0 * (self.order - 0.85)**2 + 1.5 * (self.excitation - 0.15)**2 + 1.0 * (self.defect_density - 0.10)**2
-        d_fluid_sq = 1.0 * (self.order - 0.50)**2 + 1.5 * (self.excitation - 0.50)**2 + 1.0 * (self.defect_density - 0.40)**2
-        d_plas_sq = 1.5 * (self.order - 0.15)**2 + 2.0 * (self.excitation - 0.95)**2 + 1.5 * (self.defect_density - 0.80)**2
+        # Crys:   (0.65, 0.22, 0.20)
+        # Fluid:  (0.48, 0.45, 0.35)
+        # Plasma: (0.22, 0.85, 0.75)
+        d_crys_sq = 1.4 * (self.order - 0.65)**2 + 1.4 * (self.excitation - 0.22)**2 + 1.0 * (self.defect_density - 0.20)**2
+        d_fluid_sq = 1.0 * (self.order - 0.48)**2 + 1.2 * (self.excitation - 0.45)**2 + 1.0 * (self.defect_density - 0.35)**2
+        d_plas_sq = 1.5 * (self.order - 0.22)**2 + 1.8 * (self.excitation - 0.85)**2 + 1.2 * (self.defect_density - 0.75)**2
 
-        beta = 4.0
+        beta = 2.5
         exp_crys = math.exp(-beta * d_crys_sq)
         exp_fluid = math.exp(-beta * d_fluid_sq)
         exp_plas = math.exp(-beta * d_plas_sq)

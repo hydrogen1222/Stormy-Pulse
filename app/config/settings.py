@@ -19,6 +19,7 @@ DEFAULT_SETTINGS = {
     "show_left_hud": True,
     "show_right_hud": True,
     "show_track_title": True,
+    "show_track_artist": True,
     "show_lyrics": False,
     "show_fps": True,
     "show_dev_hud": False,
@@ -39,6 +40,7 @@ DEFAULT_SETTINGS = {
     "font_scale_left_hud": 1.0,
     "font_scale_right_hud": 1.0,
     "module_scale_title": 1.0,
+    "module_scale_artist": 1.0,
     "module_scale_lyrics": 1.0,
     "module_scale_left_hud": 1.0,
     "module_scale_right_hud": 1.0,
@@ -53,6 +55,8 @@ DEFAULT_SETTINGS = {
     "layout_left_hud_y": 0.0,
     "layout_right_hud_x": 0.0,
     "layout_right_hud_y": 0.0,
+    "custom_track_title": "",
+    "custom_track_artist": "",
     "metadata_overrides": {},
 }
 
@@ -92,6 +96,23 @@ class Settings:
     def set(self, key, value):
         self.data[key] = value
         self.save()
+
+    def merge_overrides(self, values: Optional[dict]) -> dict:
+        """Return the effective data dict with temporary overrides applied (no persistence)."""
+        merged = dict(self.data)
+        if values:
+            for key, value in values.items():
+                if value is not None:
+                    merged[key] = value
+        return merged
+
+    def override(self, values: Optional[dict]):
+        """Context manager: temporary in-memory overrides that are never saved to disk.
+
+        Used by the WebUI / headless rendering paths so browser-side tweaks do not
+        overwrite the desktop application's persisted configuration.
+        """
+        return _SettingsOverride(self, values)
 
     def get_cache_dir(self) -> Path:
         """Get the feature-cache directory.
@@ -161,6 +182,27 @@ class Settings:
                 print(f"[Settings] Migrated feature cache: {legacy_file.name}")
             except OSError as exc:
                 print(f"[Settings] Failed to migrate {legacy_file.name}: {exc}")
+
+
+class _SettingsOverride:
+    """Reusable context manager returned by Settings.override()."""
+
+    def __init__(self, owner: "Settings", values: Optional[dict]):
+        self._owner = owner
+        self._values = values
+        self._original: Optional[dict] = None
+
+    def __enter__(self) -> "Settings":
+        self._original = self._owner.data
+        self._owner.data = self._owner.merge_overrides(self._values)
+        return self._owner
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        if self._original is not None:
+            self._owner.data = self._original
+            self._original = None
+        return False
+
 
 # Global settings instance
 settings = Settings()
