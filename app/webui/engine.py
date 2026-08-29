@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+
+# Headless-first: force the Qt offscreen platform on Linux unless the operator
+# explicitly chose one (SSH X11 forwarding may set an unreachable DISPLAY).
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PIL import Image
 

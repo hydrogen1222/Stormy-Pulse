@@ -14,8 +14,9 @@ import os
 import sys
 from typing import Any, Dict
 
-# Headless servers: make sure a Qt platform plugin exists before any GUI import.
-if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+# Headless-first: force the Qt offscreen platform on Linux unless the operator
+# explicitly chose one (a set-but-unreachable DISPLAY must not abort the child).
+if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 

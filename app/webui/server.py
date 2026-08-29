@@ -22,8 +22,11 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-# Ensure Qt offscreen mode on headless Linux servers
-if sys.platform.startswith("linux") and not os.environ.get("DISPLAY") and not os.environ.get("WAYLAND_DISPLAY"):
+# Headless-first: the WebUI never shows a window on purpose. Force the Qt
+# offscreen platform on Linux unless the operator explicitly chose one —
+# DISPLAY being set (e.g. SSH X11 forwarding) does NOT mean it is reachable,
+# and an unusable xcb plugin aborts the whole process at QApplication creation.
+if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
