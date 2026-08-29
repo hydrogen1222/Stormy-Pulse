@@ -192,8 +192,12 @@ def _render_segment_worker(
     lyrics_path: str = "",
     use_gpu: bool = False,
     segment_codec_args: Optional[list[str]] = None,
+    startup_delay: float = 0.0,
 ):
     """Entry point for spawned worker processes: apply UI overrides, then render."""
+    if startup_delay > 0:
+        # Stagger EGL/X11 initialization across workers to avoid init races.
+        time.sleep(startup_delay)
     with settings.override(ui_overrides):
         _render_segment_worker_impl(
             ffmpeg_path, track_path, title, artist, width, height, fps,
@@ -496,7 +500,6 @@ class VideoExporter:
         cancel_event = ctx.Event()
         segment_progress = {idx: 0 for idx in range(len(frame_ranges))}
         segment_outputs: dict[int, str] = {}
-        processes = []
 
         # Per-worker encoder thread cap so N workers never oversubscribe the CPU.
         worker_threads = max(1, (os.cpu_count() or 8) // max(worker_count, 1))
@@ -505,7 +508,14 @@ class VideoExporter:
         with tempfile.TemporaryDirectory(prefix="mv_export_") as temp_dir:
             try:
                 self._report(progress_callback, 0, f"启动 {worker_count} 个并行渲染进程")
-                for idx, (start_frame, end_frame) in enumerate(frame_ranges):
+
+                done_segments: set[int] = set()
+                attempts_left = {idx: 2 for idx in range(len(frame_ranges))}
+                last_fail_time: dict[int, float] = {}
+                procs: list[list] = []  # [proc, segment_idx]
+
+                def spawn_segment(idx: int, startup_delay: float):
+                    start_frame, end_frame = frame_ranges[idx]
                     segment_path = str(Path(temp_dir) / f"segment_{idx:03d}.mkv")
                     proc = ctx.Process(
                         target=_render_segment_worker,
@@ -529,14 +539,39 @@ class VideoExporter:
                             options.lyrics_path,
                             options.use_gpu_renderer,
                             segment_codec_args,
+                            startup_delay,
                         ),
                         daemon=True,
                     )
                     proc.start()
-                    processes.append(proc)
+                    procs.append([proc, idx])
 
-                done_count = 0
-                while done_count < len(processes):
+                # Stagger startups: 24 simultaneous NVIDIA EGL/X11 initializations
+                # occasionally race and leave some workers without a GL context.
+                for idx in range(len(frame_ranges)):
+                    spawn_segment(idx, startup_delay=min(0.4 * idx, 12.0))
+
+                def handle_failure(idx: int, reason: str):
+                    if idx in done_segments:
+                        return
+                    now = time.monotonic()
+                    if now - last_fail_time.get(idx, 0.0) < 2.0:
+                        return  # duplicate event for the same dead spawn
+                    last_fail_time[idx] = now
+                    if attempts_left.get(idx, 0) > 0:
+                        attempts_left[idx] -= 1
+                        segment_progress[idx] = 0
+                        self._report(
+                            progress_callback,
+                            0,
+                            f"分段 {idx + 1} 失败并自动重启（剩 {attempts_left[idx]} 次）: {reason}",
+                        )
+                        spawn_segment(idx, startup_delay=2.0)
+                    else:
+                        cancel_event.set()
+                        raise VideoExportError(f"分段 {idx + 1} 重试后仍失败: {reason}")
+
+                while len(done_segments) < len(frame_ranges):
                     if cancel_check and cancel_check():
                         cancel_event.set()
                         raise VideoExportCancelled("用户取消导出")
@@ -544,10 +579,7 @@ class VideoExporter:
                     try:
                         msg_type, worker_index, payload = progress_queue.get(timeout=0.2)
                     except queue.Empty:
-                        for proc in processes:
-                            if proc.exitcode not in (None, 0):
-                                raise VideoExportError(f"渲染子进程异常退出: {proc.exitcode}")
-                        continue
+                        msg_type, worker_index, payload = None, None, None
 
                     if msg_type == "progress":
                         segment_progress[worker_index] = int(payload)
@@ -559,19 +591,22 @@ class VideoExporter:
                         self._report(
                             progress_callback,
                             pct,
-                            f"并行渲染中 {rendered_frames}/{total_frames} 帧 | 进程 {worker_index + 1}/{len(processes)}",
+                            f"并行渲染中 {rendered_frames}/{total_frames} 帧 | 进程 {worker_index + 1}/{len(frame_ranges)}",
                         )
                     elif msg_type == "done":
                         segment_outputs[worker_index] = str(payload)
-                        done_count += 1
+                        done_segments.add(worker_index)
                     elif msg_type == "error":
-                        cancel_event.set()
-                        raise VideoExportError(str(payload))
+                        handle_failure(worker_index, str(payload))
 
-                for proc in processes:
-                    proc.join()
-                    if proc.exitcode not in (0, None):
-                        raise VideoExportError(f"渲染子进程异常退出: {proc.exitcode}")
+                    # Reap silently-dead workers (segfault etc.) and retry them.
+                    for entry in procs:
+                        proc, idx = entry
+                        if idx not in done_segments and not proc.is_alive() and proc.exitcode not in (None, 0):
+                            handle_failure(idx, f"渲染子进程异常退出 (code={proc.exitcode})")
+
+                for entry in procs:
+                    entry[0].join()
 
                 if len(segment_outputs) != len(frame_ranges):
                     raise VideoExportError("并行渲染未生成完整的中间片段")
@@ -603,12 +638,12 @@ class VideoExporter:
                 return output_path
             except Exception:
                 cancel_event.set()
-                for proc in processes:
-                    if proc.is_alive():
-                        proc.terminate()
-                for proc in processes:
+                for entry in procs:
+                    if entry[0].is_alive():
+                        entry[0].terminate()
+                for entry in procs:
                     try:
-                        proc.join(timeout=1)
+                        entry[0].join(timeout=1)
                     except Exception:
                         pass
                 if output_path.exists():
