@@ -153,7 +153,8 @@ def test_video_exporter_cpu_libx264_command_building():
 
 
 def test_video_exporter_gpu_routing(monkeypatch):
-    """Verify use_gpu_renderer=True prevents parallel worker dispatch and uses VisualizerViewport."""
+    """use_gpu_renderer parallelizes across GPU worker contexts when workers>1,
+    and falls back to the sequential single-context path when workers==1."""
     exporter = VideoExporter()
     track = Track("dummy.mp3")
     feature_cache = MagicMock()
@@ -163,7 +164,7 @@ def test_video_exporter_gpu_routing(monkeypatch):
     called_sequential = []
 
     def fake_parallel(*args, **kwargs):
-        called_parallel.append(True)
+        called_parallel.append(kwargs.get("worker_count"))
         return Path("out.mp4")
 
     def fake_sequential(*args, **kwargs):
@@ -173,19 +174,33 @@ def test_video_exporter_gpu_routing(monkeypatch):
     monkeypatch.setattr(exporter, "_export_track_parallel", fake_parallel)
     monkeypatch.setattr(exporter, "_export_track_sequential", fake_sequential)
 
-    options = VideoExportOptions(
+    gpu_options = dict(
         output_path="out.mp4",
         width=1280,
         height=720,
         fps=60,
         video_codec="libx264",
         use_gpu_renderer=True,
-        cpu_render_workers=4,
     )
 
-    exporter.export_track(track, feature_cache, options)
-    assert not called_parallel, "GPU renderer should never use parallel CPU workers"
-    assert called_sequential, "GPU renderer must use sequential export"
+    # GPU + several workers => parallel GPU segments
+    exporter.export_track(track, feature_cache, VideoExportOptions(cpu_render_workers=4, **gpu_options))
+    assert called_parallel and called_parallel[0] == 4, "GPU rendering should parallelize across GL contexts"
+    assert not called_sequential
+
+    # GPU + single worker => sequential (one GL context)
+    exporter.export_track(track, feature_cache, VideoExportOptions(cpu_render_workers=1, **gpu_options))
+    assert called_sequential, "GPU with 1 worker must use the sequential path"
+
+
+def test_segment_worker_signature_accepts_gpu():
+    """The spawned worker supports GPU (OpenGL) segment rendering."""
+    import inspect
+
+    from app.export.video_exporter import _render_segment_worker_impl
+
+    sig = inspect.signature(_render_segment_worker_impl)
+    assert "use_gpu" in sig.parameters
 
 
 def test_amf_native_single_frame_smoke(qapp):

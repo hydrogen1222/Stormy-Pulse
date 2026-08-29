@@ -165,13 +165,14 @@ def _render_segment_worker(
     ui_overrides: Optional[dict] = None,
     feature_overrides: Optional[dict] = None,
     lyrics_path: str = "",
+    use_gpu: bool = False,
 ):
     """Entry point for spawned worker processes: apply UI overrides, then render."""
     with settings.override(ui_overrides):
         _render_segment_worker_impl(
             ffmpeg_path, track_path, title, artist, width, height, fps,
             start_frame, end_frame, duration, segment_path, worker_index,
-            progress_queue, cancel_event, feature_overrides, lyrics_path,
+            progress_queue, cancel_event, feature_overrides, lyrics_path, use_gpu,
         )
 
 
@@ -192,8 +193,13 @@ def _render_segment_worker_impl(
     cancel_event,
     feature_overrides: Optional[dict] = None,
     lyrics_path: str = "",
+    use_gpu: bool = False,
 ):
-    """Render one contiguous segment into a temporary lossless file."""
+    """Render one contiguous segment into a temporary lossless file.
+
+    With ``use_gpu=True`` the segment renders through the OpenGL viewport
+    (this child process's main thread is its Qt GUI thread).
+    """
     try:
         from PySide6.QtWidgets import QApplication
 
@@ -203,10 +209,15 @@ def _render_segment_worker_impl(
             progress_queue.put(("error", worker_index, "未能在子进程中加载分析缓存"))
             return
 
-        track = Track(track_path)
-        renderer = VisualizerRenderer()
+        if use_gpu:
+            from app.visual_gpu.viewport import VisualizerViewport
+            renderer = VisualizerViewport()
+        else:
+            renderer = VisualizerRenderer()
         renderer.resize(width, height)
         renderer.set_target_fps(fps)
+
+        track = Track(track_path)
 
         bundle = None
         try:
@@ -294,20 +305,22 @@ class VideoExporter:
         """Render the track offline and encode it through ffmpeg."""
         self._validate_options(options)
 
-        if not options.use_gpu_renderer and options.video_codec not in {"av1_amf", "h264_amf", "hevc_amf"}:
-            worker_count = self._resolve_worker_count(options, feature_cache.duration)
-            if worker_count > 1:
-                try:
-                    return self._export_track_parallel(
-                        track=track,
-                        feature_cache=feature_cache,
-                        options=options,
-                        worker_count=worker_count,
-                        progress_callback=progress_callback,
-                        cancel_check=cancel_check,
-                    )
-                except Exception as exc:
-                    self._report(progress_callback, 0, f"并行渲染回退到单线程: {exc}")
+        # GPU (OpenGL) rendering also parallelizes: each spawned worker owns its
+        # own GL context, so N workers render N segments concurrently (the
+        # per-frame bottleneck is the GL readback + composite, which scales).
+        worker_count = self._resolve_worker_count(options, feature_cache.duration)
+        if worker_count > 1:
+            try:
+                return self._export_track_parallel(
+                    track=track,
+                    feature_cache=feature_cache,
+                    options=options,
+                    worker_count=worker_count,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
+            except Exception as exc:
+                self._report(progress_callback, 0, f"并行渲染回退到单线程: {exc}")
 
         return self._export_track_sequential(
             track=track,
@@ -480,6 +493,7 @@ class VideoExporter:
                             options.ui_overrides,
                             options.feature_overrides,
                             options.lyrics_path,
+                            options.use_gpu_renderer,
                         ),
                         daemon=True,
                     )
@@ -647,6 +661,10 @@ class VideoExporter:
             "-i",
             str(concat_list),
         ]
+        if options.video_codec in {"av1_amf", "h264_amf", "hevc_amf"}:
+            # The hwupload filter in the AMF output chain needs an explicit
+            # D3D11 device, same as the rawvideo pipeline.
+            cmd += ["-init_hw_device", "d3d11va=amf:0", "-filter_hw_device", "amf"]
         return self._append_output_args(cmd, track, options)
 
     def _append_output_args(self, cmd: list[str], track: Track, options: VideoExportOptions) -> list[str]:

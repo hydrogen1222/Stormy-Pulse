@@ -441,11 +441,13 @@ $("cancelExportBtn").addEventListener("click", async () => {
   } catch (e) { /* transient */ }
 });
 
-/* GPU frame rendering is a single GL context: parallel CPU workers don't apply. */
+/* GPU rendering parallelizes too: each worker owns its own GL context. */
 $("e_gpu").addEventListener("change", () => {
   const gpu = $("e_gpu").checked;
-  $("e_workers").disabled = gpu;
-  $("v_workers").textContent = gpu ? "—" : $("e_workers").value;
+  $("e_workers").title = gpu
+    ? "GPU 并行渲染进程数：每个进程持有独立 OpenGL 上下文，同时渲染不同分段"
+    : "0 为自动选择；手动指定更高进程数会提高 CPU 占用";
+  $("v_workers").textContent = $("e_workers").value;
 });
 
 $("exportBtn").addEventListener("click", async () => {
