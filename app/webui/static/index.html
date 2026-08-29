@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Stormy-Pulse 音乐可视化工作站</title>
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
 <header>
@@ -169,10 +169,10 @@
         </label>
       </div>
       <label>并行渲染进程 <span class="val" id="v_workers">4</span>
-        <input type="range" id="e_workers" min="1" max="16" step="1" value="4">
+        <input type="range" id="e_workers" min="1" max="32" step="1" value="4">
       </label>
-      <label class="check" id="gpuRenderWrap" title="使用 OpenGL 硬件加速渲染每一帧，大幅降低 CPU 负载">
-        <input type="checkbox" id="e_gpu"> 🧬 GPU 渲染每一帧 (OpenGL，单线程)
+      <label class="check" id="gpuRenderWrap" title="使用 OpenGL 硬件加速渲染每一帧；多进程并行，每个进程持有独立 GL 上下文">
+        <input type="checkbox" id="e_gpu"> 🧬 GPU 渲染每一帧 (OpenGL)
       </label>
       <div id="gpuHint" class="muted small-text hidden"></div>
       <button id="exportBtn" class="primary" disabled>🚀 开始全量导出视频</button>
@@ -190,6 +190,6 @@
   </aside>
 </main>
 
-<script src="/static/app.js?v=7"></script>
+<script src="/static/app.js?v=8"></script>
 </body>
 </html>
