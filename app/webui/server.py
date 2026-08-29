@@ -703,6 +703,12 @@ def _probe_gpu_render() -> "tuple[bool, str]":
     Creating a GL context can hard-crash on machines without proper drivers;
     a subprocess probe keeps the server alive to report "unavailable".
     Returns (ok, detail) where detail explains the failure for the UI.
+
+    Second attempt: when an NVIDIA glvnd vendor JSON exists, retry with
+    __EGL_VENDOR_LIBRARY_FILENAMES pinned to it — glvnd sometimes dispatches
+    to Mesa (which cannot create a headless context on an NVIDIA-only box)
+    instead of the NVIDIA vendor library. When that retry succeeds, the env
+    is applied process-wide so GPU export children inherit it.
     """
     code = (
         "import sys, traceback\n"
@@ -718,27 +724,69 @@ def _probe_gpu_render() -> "tuple[bool, str]":
         "    traceback.print_exc()\n"
         "    sys.exit(3)\n"
     )
-    try:
-        proc = subprocess.run(
+
+    def _run_child(extra_env: Optional[Dict[str, str]] = None):
+        env = None
+        if extra_env:
+            env = dict(os.environ)
+            env.update(extra_env)
+        return subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True,
             text=True,
             timeout=90,
             cwd=str(Path(__file__).resolve().parents[2]),
+            env=env,
         )
+
+    def _detail(proc) -> str:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        tail = " | ".join(line.strip() for line in detail[-4:] if line.strip())
+        return tail or f"探测失败 (exit={proc.returncode})"
+
+    try:
+        proc = _run_child()
     except Exception as exc:
         return False, f"探测子进程未能运行: {exc}"
 
     if proc.returncode == 0 and "GPU_OK" in proc.stdout:
         return True, "GPU_OK"
 
-    detail = (proc.stderr or proc.stdout or "").strip().splitlines()
-    # Keep the most informative tail lines (Qt plugin errors / tracebacks).
-    tail = " | ".join(line.strip() for line in detail[-4:] if line.strip())
-    if proc.returncode not in (0, 3) or "aborted" in tail.lower() or "core dumped" in tail.lower():
-        tail = tail or f"探测进程异常退出 (code={proc.returncode})"
-        return False, f"{tail} [exit={proc.returncode}]"
-    return False, tail or f"探测失败 (exit={proc.returncode})"
+    # Retry: pin glvnd to the NVIDIA vendor JSON when it exists.
+    nvidia_json = ""
+    if sys.platform.startswith("linux"):
+        for candidate in (
+            "/usr/share/glvnd/egl_vendor.d/10_nvidia.json",
+            "/etc/glvnd/egl_vendor.d/10_nvidia.json",
+        ):
+            if os.path.isfile(candidate):
+                nvidia_json = candidate
+                break
+    if nvidia_json:
+        try:
+            proc2 = _run_child({"__EGL_VENDOR_LIBRARY_FILENAMES": nvidia_json})
+        except Exception:
+            proc2 = None
+        if proc2 is not None and proc2.returncode == 0 and "GPU_OK" in proc2.stdout:
+            # Apply the workaround for the whole server so spawned GPU export
+            # children inherit it.
+            os.environ["__EGL_VENDOR_LIBRARY_FILENAMES"] = nvidia_json
+            return True, f"GPU_OK (via {nvidia_json})"
+        if proc2 is not None:
+            proc = proc2
+
+    tail = _detail(proc)
+    hint = ""
+    if sys.platform.startswith("linux"):
+        import glob
+
+        if not (glob.glob("/usr/lib64/libnvidia-eglcore*") or glob.glob("/usr/lib/x86_64-linux-gnu/libnvidia-eglcore*")):
+            hint = "；未找到 libnvidia-eglcore（NVIDIA 驱动可能缺少 OpenGL/EGL 组件）"
+        elif nvidia_json:
+            hint = f"；已尝试 {nvidia_json} 仍失败，可尝试 sudo modprobe nvidia_drm modeset=1 后重试"
+        else:
+            hint = "；未找到 glvnd NVIDIA 厂商注册文件（10_nvidia.json）"
+    return False, f"{tail}{hint}"
 
 
 @app.get("/api/gpu")
