@@ -40,6 +40,12 @@ def run_gpu_export_worker(
     import signal
 
     def _sigterm_handler(signum, frame):
+        if sys.is_finalizing():
+            # During interpreter shutdown raising SystemExit from a signal
+            # handler produces "Exception ignored in atexit callback".  Exit
+            # immediately instead; multiprocessing has already had its chance
+            # to reap daemonic children by this point.
+            os._exit(0)
         raise SystemExit(0)
 
     try:
@@ -58,17 +64,15 @@ def run_gpu_export_worker(
         try:
             from PySide6.QtWidgets import QApplication
 
-            QApplication.instance() or QApplication([])
+            _app = QApplication.instance() or QApplication([])
 
             from app.analysis.cache import FeatureCacheManager
             from app.core.music_library import Track
-            from app.dynamics.context import build_dynamics_bundle
             from app.export.video_exporter import (
                 VideoExporter,
                 VideoExportCancelled,
                 VideoExportOptions,
             )
-            from app.visual.themes import apply_dna_overrides
 
             options = VideoExportOptions(**options_dict)
 
@@ -85,8 +89,12 @@ def run_gpu_export_worker(
             # its own dynamics bundle + theme from these).
             options.ui_overrides = dict(ui_overrides)
             options.feature_overrides = dict(feature_overrides)
-            options.title_override = title
-            options.artist_override = artist
+            # Prefer explicit child-process args, but fall back to the UI
+            # override dict in case a caller did not pre-resolve them.
+            custom_title = str(ui_overrides.get("custom_track_title", "") or "").strip()
+            custom_artist = str(ui_overrides.get("custom_track_artist", "") or "").strip()
+            options.title_override = custom_title or title
+            options.artist_override = custom_artist or artist
             options.lyrics_path = lyrics_path
 
             def _progress(pct: int, msg: str):

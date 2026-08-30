@@ -2,6 +2,8 @@
 Window-level feature analysis (rolling statistics).
 Strictly causal trailing windows [t - window_sec, t] aligned to 1Hz timeline.
 """
+from concurrent.futures import ThreadPoolExecutor
+import os
 from typing import Dict, Tuple
 import numpy as np
 
@@ -99,7 +101,7 @@ def compute_window_features(
     centroid = frame_features[:, F_CENTROID]
     flux = frame_features[:, F_FLUX]
 
-    for win_sec in [2, 4, 8]:
+    def _compute_window(win_sec: int) -> Tuple[int, Dict[str, np.ndarray]]:
         energy_mean, energy_trend = compute_rolling_stats_causal(rms, frame_rate, times_1hz, float(win_sec))
         brightness_mean, brightness_trend = compute_rolling_stats_causal(centroid, frame_rate, times_1hz, float(win_sec))
         spectral_activity, _ = compute_rolling_stats_causal(flux, frame_rate, times_1hz, float(win_sec))
@@ -117,7 +119,7 @@ def compute_window_features(
             1.0,
         )
 
-        windows[f"stats_{win_sec}s"] = {
+        return win_sec, {
             "energy_mean": energy_mean,
             "energy_trend": energy_trend,
             "brightness_mean": brightness_mean,
@@ -127,6 +129,12 @@ def compute_window_features(
             "transient_density": norm_onset_density,
             "chaos_proxy": chaos_proxy,
         }
+
+    # The three window sizes are independent; use all available cores (bounded
+    # to the number of windows) so this stage does not run strictly serially.
+    with ThreadPoolExecutor(max_workers=min(3, (os.cpu_count() or 1))) as executor:
+        for win_sec, stats in executor.map(_compute_window, [2, 4, 8]):
+            windows[f"stats_{win_sec}s"] = stats
 
     return {
         "times_1hz": times_1hz,

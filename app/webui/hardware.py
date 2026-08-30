@@ -215,10 +215,28 @@ def get_encoder_dropdown_choices() -> List[tuple[str, str]]:
     return choices
 
 
+_HARDWARE_ENCODER_PREFERENCE = {
+    "h264_nvenc",
+    "hevc_nvenc",
+    "av1_nvenc",
+    "h264_qsv",
+    "hevc_qsv",
+    "av1_qsv",
+    "h264_amf",
+    "hevc_amf",
+    "av1_amf",
+    "h264_videotoolbox",
+    "hevc_videotoolbox",
+}
+
+
 def get_default_encoder(choices: Optional[List[tuple[str, str]]] = None) -> str:
-    """Default export codec: prefer libx264 for compatibility, else first choice."""
+    """Default export codec: prefer a working hardware encoder for speed, then libx264."""
     choices = choices if choices is not None else get_encoder_dropdown_choices()
     codecs = [c for _, c in choices]
+    for codec in codecs:
+        if codec in _HARDWARE_ENCODER_PREFERENCE:
+            return codec
     if "libx264" in codecs:
         return "libx264"
     return codecs[0] if codecs else "libx264"

@@ -1,6 +1,7 @@
 """Tests for GPU Viewport reuse_buffer and AV1_AMF export pipeline."""
 import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -9,7 +10,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QImage
 
 from app.core.music_library import Track
-from app.export.video_exporter import VideoExporter, VideoExportOptions
+from app.export.video_exporter import VideoExporter, VideoExportCancelled, VideoExportOptions
 from app.visual_gpu.viewport import VisualizerViewport
 from app.visual_gpu.hud_overlay import HudOverlayRenderer
 
@@ -152,6 +153,84 @@ def test_video_exporter_cpu_libx264_command_building():
     assert output_section[out_pix_idx + 1] == "yuv420p"
 
 
+def test_segment_intermediate_uses_final_hardware_codec():
+    """Parallel NVENC/QSV segments use the final codec so concat can stream-copy."""
+    from app.export.video_exporter import _segment_intermediate_args
+
+    nvenc_options = VideoExportOptions(
+        output_path="x.mp4", video_codec="hevc_nvenc", use_gpu_renderer=True
+    )
+    nvenc_args = _segment_intermediate_args(nvenc_options, worker_threads=4)
+    assert nvenc_args[1] == "hevc_nvenc"
+
+    qsv_options = VideoExportOptions(
+        output_path="x.mp4", video_codec="h264_qsv", use_gpu_renderer=True
+    )
+    qsv_args = _segment_intermediate_args(qsv_options, worker_threads=4)
+    assert qsv_args[1] == "h264_qsv"
+
+
+def test_cpu_affinity_helper_returns_stable_sets():
+    """Parallel workers should be assigned stable, non-overlapping CPU sets."""
+    from app.core.cpu_affinity import cpu_core_groups, worker_cpu_affinity
+
+    groups = cpu_core_groups()
+    assert groups
+    # On this host each group is one physical core (1 or 2 logical CPUs).
+    assert all(1 <= len(g) <= 2 for g in groups)
+
+    worker_count = min(32, len(groups))
+    seen = set()
+    for i in range(worker_count):
+        cpus = tuple(worker_cpu_affinity(i, worker_count))
+        assert cpus
+        # With <= physical-core workers, each worker gets its own core group.
+        assert cpus not in seen
+        seen.add(cpus)
+
+
+def test_concat_copy_used_for_gpu_nvenc_export():
+    """GPU + NVENC segments are stream-copied at concat time to skip a 2nd NVENC pass."""
+    exporter = VideoExporter()
+    track = Track("dummy.mp3")
+    track.metadata.title = "Test Title"
+    track.metadata.artist = "Test Artist"
+    options = VideoExportOptions(
+        output_path="test_gpu.mp4",
+        width=3840,
+        height=2160,
+        fps=120,
+        video_codec="h264_nvenc",
+        use_gpu_renderer=True,
+    )
+    concat_list = Path("/tmp/segments.txt")
+    cmd = exporter._build_concat_ffmpeg_command(track, options, concat_list)
+    assert "-c:v" in cmd
+    assert cmd[cmd.index("-c:v") + 1] == "copy"
+    assert "h264_nvenc" not in cmd[cmd.index("-c:v"):]
+
+
+def test_concat_reencondes_for_cpu_renderer():
+    """CPU rendering + CPU codec still re-encodes at concat (no stream copy)."""
+    exporter = VideoExporter()
+    track = Track("dummy.mp3")
+    track.metadata.title = "Test Title"
+    track.metadata.artist = "Test Artist"
+    options = VideoExportOptions(
+        output_path="test_cpu.mp4",
+        width=1920,
+        height=1080,
+        fps=60,
+        video_codec="libx264",
+        use_gpu_renderer=False,
+    )
+    concat_list = Path("/tmp/segments.txt")
+    cmd = exporter._build_concat_ffmpeg_command(track, options, concat_list)
+    assert "-c:v" in cmd
+    assert cmd[cmd.index("-c:v") + 1] == "libx264"
+    assert "copy" not in cmd[cmd.index("-c:v"):]
+
+
 def test_video_exporter_gpu_routing(monkeypatch):
     """use_gpu_renderer parallelizes across GPU worker contexts when workers>1,
     and falls back to the sequential single-context path when workers==1."""
@@ -193,6 +272,35 @@ def test_video_exporter_gpu_routing(monkeypatch):
     assert called_sequential, "GPU with 1 worker must use the sequential path"
 
 
+def test_parallel_cancel_does_not_fall_back_to_sequential(monkeypatch):
+    """User cancellation in parallel export must propagate, not trigger fallback."""
+    exporter = VideoExporter()
+    track = Track("dummy.mp3")
+    feature_cache = MagicMock()
+    feature_cache.duration = 10.0
+
+    def fake_parallel(*args, **kwargs):
+        raise VideoExportCancelled("用户取消导出")
+
+    def fake_sequential(*args, **kwargs):
+        raise AssertionError("cancelled export must not start sequential fallback")
+
+    monkeypatch.setattr(exporter, "_export_track_parallel", fake_parallel)
+    monkeypatch.setattr(exporter, "_export_track_sequential", fake_sequential)
+
+    with pytest.raises(VideoExportCancelled):
+        exporter.export_track(
+            track,
+            feature_cache,
+            VideoExportOptions(
+                output_path="out.mp4",
+                width=1280,
+                height=720,
+                cpu_render_workers=2,
+            ),
+        )
+
+
 def test_segment_worker_signature_accepts_gpu():
     """The spawned worker supports GPU (OpenGL) segment rendering."""
     import inspect
@@ -205,6 +313,9 @@ def test_segment_worker_signature_accepts_gpu():
 
 def test_amf_native_single_frame_smoke(qapp):
     """Smoke test: execute native ffmpeg rawvideo encode with D3D11 AMF if available."""
+    if sys.platform != "win32":
+        pytest.skip("AMF/D3D11 is Windows-only; not available on this headless Linux host")
+
     try:
         res = subprocess.run(["ffmpeg", "-h", "encoder=av1_amf"], capture_output=True, text=True)
         if res.returncode != 0:

@@ -1,8 +1,8 @@
 """
 Settings manager for the music visualizer.
 """
+import copy
 import json
-import os
 import shutil
 from pathlib import Path
 from typing import Optional
@@ -66,7 +66,7 @@ class Settings:
     def __init__(self):
         self.config_dir = Path.home() / ".music_visualizer"
         self.config_file = self.config_dir / "settings.json"
-        self.data = DEFAULT_SETTINGS.copy()
+        self.data = copy.deepcopy(DEFAULT_SETTINGS)
         self.load()
 
     def load(self):

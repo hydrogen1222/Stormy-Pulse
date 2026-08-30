@@ -11,6 +11,7 @@ import time
 import hashlib
 
 from ..config.constants import CACHE_VERSION
+from ..core.cpu_affinity import pin_current_thread_to_core
 
 from .features import (
     FeatureCache, TrackAnalysisMetadata, FrameFeatureSequence, 
@@ -18,6 +19,7 @@ from .features import (
     SemanticControlSet, GlobalFeatureSet
 )
 from .spectrum import (
+    fast_hpss,
     compute_rms, compute_peak_energy, compute_spectral_centroid,
     compute_spectral_rolloff, compute_spectral_bandwidth, compute_spectral_flux,
     compute_zero_crossing_rate, compute_onset_strength, compute_band_energies_6,
@@ -61,42 +63,57 @@ class FeatureExtractor:
             sr = self.sr
             duration = len(y) / sr
 
-            # --- STAGE B: Component separation (Fast approximation) ---
+            # --- STAGE B/C: Fast component separation + spectrograms ---
             if progress_callback: progress_callback(10, 100, "Harmonic/Percussive separation...")
-            # Use margin for faster but rougher separation
-            y_harmonic, y_percussive = librosa.effects.hpss(y, margin=(1.0, 5.0))
+            # Mean-filter HPSS is dramatically faster than librosa's median-filter
+            # HPSS (the old single largest extraction cost) and returns the STFTs
+            # we need anyway, so we avoid recomputing them on the separated waves.
+            S, S_harm, S_perc, y_harmonic, y_percussive = fast_hpss(
+                y,
+                n_fft=self.n_fft,
+                hop_length=self.hop_length,
+                kernel_size=(15, 7),
+                margin=(1.0, 5.0),
+            )
 
-            # --- STAGE C: Multi-representation ---
             if progress_callback: progress_callback(20, 100, "Computing spectrograms...")
-            S = librosa.stft(y, n_fft=self.n_fft, hop_length=self.hop_length)
             S_mag = np.abs(S)
             S_power = S_mag**2
 
-            S_perc = librosa.stft(y_percussive, n_fft=self.n_fft, hop_length=self.hop_length)
-            S_perc_power = np.abs(S_perc)**2
-            
-            S_harm = librosa.stft(y_harmonic, n_fft=self.n_fft, hop_length=self.hop_length)
-            S_harm_power = np.abs(S_harm)**2
+            S_harm_mag = np.abs(S_harm)
 
             # --- LEVEL 1: Frame-level Features ---
             if progress_callback: progress_callback(30, 100, "Extracting frame features...")
             import concurrent.futures
 
             with concurrent.futures.ThreadPoolExecutor() as executor:
-                f_rms = executor.submit(compute_rms, y, self.n_fft, self.hop_length)
-                f_peak = executor.submit(compute_peak_energy, y, self.n_fft, self.hop_length)
-                f_bands = executor.submit(compute_band_energies_6, S_power, self.n_fft, sr, True)
-                f_centroid = executor.submit(compute_spectral_centroid, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
-                f_rolloff = executor.submit(compute_spectral_rolloff, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
-                f_bandwidth = executor.submit(compute_spectral_bandwidth, y, sr, self.hop_length)
-                f_flatness = executor.submit(compute_spectral_flatness, y, self.hop_length)
-                f_flux = executor.submit(compute_spectral_flux, S_mag)
-                f_onset = executor.submit(compute_onset_strength, y_percussive, sr, self.hop_length) # Use percussive for cleaner onsets
-                f_zcr = executor.submit(compute_zero_crossing_rate, y, self.n_fft, self.hop_length)
-                f_harm_e = executor.submit(compute_rms, y_harmonic, self.n_fft, self.hop_length)
-                f_perc_e = executor.submit(compute_rms, y_percussive, self.n_fft, self.hop_length)
-                f_chroma = executor.submit(compute_chroma, y_harmonic, sr, self.hop_length)
-                f_contrast = executor.submit(compute_spectral_contrast, S_mag, sr)
+                # Pin each analysis worker thread to a stable physical core.
+                # This prevents 10-20 numpy/librosa threads from migrating
+                # across all 72 logical CPUs during analysis.
+                def _submit(fn, *args, **kwargs):
+                    def _run():
+                        pin_current_thread_to_core()
+                        return fn(*args, **kwargs)
+                    return executor.submit(_run)
+
+                # Section structure only depends on the raw waveform; start it
+                # alongside frame-feature extraction so it uses another core.
+                section_future = _submit(extract_sections, y, sr, self.hop_length, duration)
+
+                f_rms = _submit(compute_rms, y, self.n_fft, self.hop_length)
+                f_peak = _submit(compute_peak_energy, y, self.n_fft, self.hop_length)
+                f_bands = _submit(compute_band_energies_6, S_power, self.n_fft, sr, True)
+                f_centroid = _submit(compute_spectral_centroid, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
+                f_rolloff = _submit(compute_spectral_rolloff, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
+                f_bandwidth = _submit(compute_spectral_bandwidth, S_mag, sr, self.n_fft)
+                f_flatness = _submit(compute_spectral_flatness, S_power, self.hop_length)
+                f_flux = _submit(compute_spectral_flux, S_mag)
+                f_onset = _submit(compute_onset_strength, y_percussive, sr, self.hop_length) # Use percussive for cleaner onsets
+                f_zcr = _submit(compute_zero_crossing_rate, y, self.n_fft, self.hop_length)
+                f_harm_e = _submit(compute_rms, y_harmonic, self.n_fft, self.hop_length)
+                f_perc_e = _submit(compute_rms, y_percussive, self.n_fft, self.hop_length)
+                f_chroma = _submit(compute_chroma, None, sr, self.hop_length, S_harm_mag, self.n_fft)
+                f_contrast = _submit(compute_spectral_contrast, S_mag, sr)
 
                 rms = f_rms.result()
                 peak = f_peak.result()
@@ -112,6 +129,7 @@ class FeatureExtractor:
                 perc_e = f_perc_e.result()
                 chroma = f_chroma.result()
                 contrast = f_contrast.result()
+                section_dict = section_future.result()
 
             n_frames = len(rms)
             times = librosa.frames_to_time(np.arange(n_frames), sr=sr, hop_length=self.hop_length)
@@ -187,7 +205,6 @@ class FeatureExtractor:
 
             # --- LEVEL 4: Section-level Features ---
             if progress_callback: progress_callback(75, 100, "Analyzing song structure...")
-            section_dict = extract_sections(y, sr, self.hop_length, duration)
             sections = SectionFeatureSet(
                 boundaries=section_dict["boundaries"],
                 labels=section_dict["labels"],

@@ -30,7 +30,7 @@ if sys.platform.startswith("linux"):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from fastapi import FastAPI, File, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.webui.engine import WebUISession
@@ -304,7 +304,29 @@ def _run_gpu_export(
     progress_queue = ctx.Queue()
     child_cancel = ctx.Event()
 
-    track_path = _session.track.file_path
+    track = _session.track
+    track_path = track.file_path
+
+    def _first_non_empty(*values: Any) -> str:
+        for value in values:
+            if value and str(value).strip():
+                return str(value).strip()
+        return ""
+
+    # GPU export bypasses WebUISession.export_video(), so carry the effective
+    # title/artist/lyrics overrides into the child explicitly; otherwise custom
+    # WebUI title/artist and uploaded .lrc would be silently dropped.
+    title_override = _first_non_empty(
+        options.title_override,
+        ui_settings.get("custom_track_title"),
+        track.metadata.title if track else "",
+    )
+    artist_override = _first_non_empty(
+        options.artist_override,
+        ui_settings.get("custom_track_artist"),
+        track.metadata.artist if track else "",
+    )
+    lyrics_path = options.lyrics_path or _session.lyrics_path or ""
 
     proc = ctx.Process(
         target=run_gpu_export_worker,
@@ -313,9 +335,9 @@ def _run_gpu_export(
             dataclasses.asdict(options),
             ui_settings,
             visual,
-            options.title_override,
-            options.artist_override,
-            options.lyrics_path,
+            title_override,
+            artist_override,
+            lyrics_path,
             progress_queue,
             child_cancel,
         ),
@@ -525,13 +547,14 @@ _AUDIO_MIME = {
 _NATIVE_AUDIO_EXTS = {".mp3", ".wav", ".flac"}
 
 
-def _ensure_playable_audio(force_recode: bool = False) -> Path:
+def _ensure_playable_audio(force_recode: bool = False, allow_transcode: bool = True) -> Path:
     """Return a browser-playable audio file path for the current track.
 
     Non-native containers are transcoded once with ffmpeg into an AAC/M4A
     sidecar next to the analysis copy; browsers always play that.
-    Must be called while holding ``_render_lock`` OR after the track reference
-    was captured under it (the transcode itself must not hold the lock).
+    ``allow_transcode=False`` only inspects/validates the current track and never
+    starts ffmpeg, so callers can do the cheap part under ``_render_lock`` and
+    run the actual transcode outside the lock.
     """
     track = _session.track
     if track is None:
@@ -544,6 +567,9 @@ def _ensure_playable_audio(force_recode: bool = False) -> Path:
     if not force_recode and src.suffix.lower() in _NATIVE_AUDIO_EXTS:
         return src
 
+    if not allow_transcode:
+        return src
+
     sidecar = src.parent / f"{src.stem}_web.m4a"
     if not sidecar.is_file():
         import shutil
@@ -551,16 +577,19 @@ def _ensure_playable_audio(force_recode: bool = False) -> Path:
 
         if shutil.which("ffmpeg") is None:
             return src  # no ffmpeg available: serve as-is and let the browser try
-        proc = subprocess.run(
-            [
-                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                "-i", str(src),
-                "-c:a", "aac", "-b:a", "256k",
-                str(sidecar),
-            ],
-            capture_output=True,
-            timeout=180,
-        )
+        try:
+            proc = subprocess.run(
+                [
+                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                    "-i", str(src),
+                    "-c:a", "aac", "-b:a", "256k",
+                    str(sidecar),
+                ],
+                capture_output=True,
+                timeout=180,
+            )
+        except Exception:
+            return src  # ffmpeg missing/hung/failed: fall back to the original file
         if proc.returncode != 0 or not sidecar.is_file():
             return src  # transcode failed: fall back to the original file
 
@@ -570,9 +599,10 @@ def _ensure_playable_audio(force_recode: bool = False) -> Path:
 @app.get("/api/audio")
 def api_audio(range_header: Optional[str] = Header(None, alias="Range"), recode: int = 0):
     with _render_lock:
-        src_path = _ensure_playable_audio(force_recode=False)
-    # Transcoding (if needed) runs without the render lock so live frames
-    # keep flowing while ffmpeg works.
+        # Only validate/resolve the source under the lock.  Transcoding (if
+        # needed) happens below without the render lock so live frames keep
+        # flowing while ffmpeg works.
+        src_path = _ensure_playable_audio(force_recode=False, allow_transcode=False)
     if recode or src_path.suffix.lower() not in _NATIVE_AUDIO_EXTS:
         path = _ensure_playable_audio(force_recode=bool(recode))
     else:
@@ -591,8 +621,15 @@ def api_audio(range_header: Optional[str] = Header(None, alias="Range"), recode:
                 range_end = int(end_str) if end_str else size - 1
             elif end_str:  # suffix range: last N bytes
                 range_start = max(0, size - int(end_str))
-            range_end = min(range_end, size - 1)
-            status_code = 206
+            # Defensive clamp: malformed/negative ranges must not produce a
+            # negative length or read past the file.
+            range_start = max(0, min(range_start, size - 1))
+            range_end = max(0, min(range_end, size - 1))
+            if range_end < range_start:
+                range_start, range_end = 0, size - 1
+                status_code = 200
+            else:
+                status_code = 206
         except ValueError:
             range_start, range_end = 0, size - 1
             status_code = 200

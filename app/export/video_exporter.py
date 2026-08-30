@@ -9,6 +9,7 @@ import os
 import queue
 import shlex
 import subprocess
+import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ from PySide6.QtGui import QImage
 from ..analysis.cache import FeatureCacheManager
 from ..analysis.features import FeatureCache
 from ..config.settings import settings
+from ..core.cpu_affinity import set_process_cpu_affinity
 from ..core.lyrics import parse_lrc_file
 from ..core.music_library import Track
 from ..visual.renderer import VisualizerRenderer
@@ -32,6 +34,18 @@ _SEGMENT_INTERMEDIATE_CODEC = "libx264"
 _SEGMENT_INTERMEDIATE_PIX_FMT = "yuv420p"  # x264 lossless is more stable with standard yuv420p
 _SEGMENT_INTERMEDIATE_ARGS = ["-preset", "ultrafast", "-crf", "0"]
 _RENDER_PROGRESS_WEIGHT = 88
+
+# Hardware encoders whose parallel segment intermediates are already in the
+# final codec.  The concat step can then stream-copy instead of re-encoding,
+# avoiding a second hardware-encoder pass (often the 4K/high-fps bottleneck).
+_HARDWARE_CONCAT_CODECS = {
+    "h264_nvenc",
+    "hevc_nvenc",
+    "av1_nvenc",
+    "h264_qsv",
+    "hevc_qsv",
+    "av1_qsv",
+}
 
 # Semantic quality names (WebUI) mapped onto codec-native x264/x265 presets.
 _QUALITY_PRESET_ALIASES = {
@@ -107,11 +121,12 @@ def _segment_intermediate_args(options: VideoExportOptions, worker_threads: int)
     """
     codec = options.video_codec
     if codec in {"h264_nvenc", "hevc_nvenc", "av1_nvenc"}:
-        # p1 + low-latency tune: fastest possible NVENC pass; intermediate
-        # quality at 80M dwarfs the final encode's bitrate anyway.
-        return ["-c:v", "h264_nvenc", "-preset", "p1", "-tune", "ll", "-b:v", "80M", "-bf", "0"]
+        # Use the same codec as the final file so the concat step can stream-copy
+        # the segments instead of running a second NVENC pass (the NVENC engine
+        # is often the throughput bottleneck on 4K/high-fps exports).
+        return ["-c:v", codec, "-preset", "p1", "-tune", "ll", "-b:v", "80M", "-bf", "0"]
     if codec in {"h264_qsv", "hevc_qsv", "av1_qsv"}:
-        return ["-c:v", "h264_qsv", "-preset", "veryfast", "-b:v", "80M", "-bf", "0"]
+        return ["-c:v", codec, "-preset", "veryfast", "-b:v", "80M", "-bf", "0"]
     return [
         "-c:v", "libx264",
         "-preset", "ultrafast",
@@ -198,8 +213,16 @@ def _render_segment_worker(
     segment_codec_args: Optional[list[str]] = None,
     startup_delay: float = 0.0,
     fast_start: bool = False,
+    worker_generation: int = 0,
+    worker_count: int = 0,
 ):
     """Entry point for spawned worker processes: apply UI overrides, then render."""
+    # Pin this worker (and its ffmpeg child) to a stable set of CPU cores.
+    # Without pinning, 20-30 ffmpeg processes all migrate across 72 logical
+    # CPUs, causing heavy context switching and uneven core utilization.
+    if worker_count > 0:
+        set_process_cpu_affinity(worker_index, worker_count)
+
     if startup_delay > 0:
         # Stagger EGL/X11 initialization across workers to avoid init races.
         time.sleep(startup_delay)
@@ -208,7 +231,7 @@ def _render_segment_worker(
             ffmpeg_path, track_path, title, artist, width, height, fps,
             start_frame, end_frame, duration, segment_path, worker_index,
             progress_queue, cancel_event, feature_overrides, lyrics_path, use_gpu,
-            segment_codec_args, fast_start,
+            segment_codec_args, fast_start, worker_generation,
         )
 
 
@@ -232,6 +255,7 @@ def _render_segment_worker_impl(
     use_gpu: bool = False,
     segment_codec_args: Optional[list[str]] = None,
     fast_start: bool = False,
+    worker_generation: int = 0,
 ):
     """Render one contiguous segment into a temporary lossless file.
 
@@ -251,7 +275,7 @@ def _render_segment_worker_impl(
         cache = FeatureCacheManager().load(track_path)
         if cache is None:
             print(f"[ExportWorker {worker_index}] cache load failed for {track_path}", flush=True)
-            progress_queue.put(("error", worker_index, "未能在子进程中加载分析缓存"))
+            progress_queue.put(("error", worker_index, worker_generation, "未能在子进程中加载分析缓存"))
             return
 
         if use_gpu:
@@ -319,7 +343,7 @@ def _render_segment_worker_impl(
                 _write_image_to_stream(proc.stdin, image)
                 rendered += 1
                 if rendered == 1 or rendered == (end_frame - start_frame) or rendered % report_every == 0:
-                    progress_queue.put(("progress", worker_index, rendered))
+                    progress_queue.put(("progress", worker_index, worker_generation, rendered))
 
             if proc.stdin:
                 proc.stdin.close()
@@ -330,7 +354,7 @@ def _render_segment_worker_impl(
             if return_code != 0:
                 raise VideoExportError(stderr_text.strip() or f"segment ffmpeg exited with code {return_code}")
 
-            progress_queue.put(("done", worker_index, segment_path))
+            progress_queue.put(("done", worker_index, worker_generation, segment_path))
             app.processEvents()
         except Exception as exc:
             if proc.stdin and not proc.stdin.closed:
@@ -340,10 +364,10 @@ def _render_segment_worker_impl(
                 proc.wait(timeout=2)
             except Exception:
                 proc.kill()
-            progress_queue.put(("error", worker_index, str(exc)))
+            progress_queue.put(("error", worker_index, worker_generation, str(exc)))
     except Exception as exc:
         print(f"[ExportWorker {worker_index}] FAILED: {exc}", flush=True)
-        progress_queue.put(("error", worker_index, str(exc)))
+        progress_queue.put(("error", worker_index, worker_generation, str(exc)))
 
 
 class VideoExporter:
@@ -377,6 +401,11 @@ class VideoExporter:
                     progress_callback=progress_callback,
                     cancel_check=cancel_check,
                 )
+            except VideoExportCancelled:
+                # Cancellation must not be hidden by the parallel->sequential
+                # fallback; the caller expects the cooperative cancel signal to
+                # propagate immediately.
+                raise
             except Exception as exc:
                 self._report(progress_callback, 0, f"并行渲染回退到单线程: {exc}")
 
@@ -536,11 +565,15 @@ class VideoExporter:
                 done_segments: set[int] = set()
                 attempts_left = {idx: 2 for idx in range(len(frame_ranges))}
                 last_fail_time: dict[int, float] = {}
-                procs: list[list] = []  # [proc, segment_idx]
+                exit0_since: dict[int, float] = {}
+                generation_counter: dict[int, int] = {}
+                procs: list[list] = []  # [proc, segment_idx, handled]
 
                 def spawn_segment(idx: int, startup_delay: float):
                     start_frame, end_frame = frame_ranges[idx]
                     segment_path = str(Path(temp_dir) / f"segment_{idx:03d}.mkv")
+                    generation = generation_counter.get(idx, 0)
+                    generation_counter[idx] = generation + 1
                     proc = ctx.Process(
                         target=_render_segment_worker,
                         args=(
@@ -565,11 +598,16 @@ class VideoExporter:
                             segment_codec_args,
                             startup_delay,
                             options.fast_segment_start,
+                            generation,
+                            worker_count,
                         ),
                         daemon=True,
                     )
                     proc.start()
-                    procs.append([proc, idx])
+                    procs.append([proc, idx, False])
+                    # A fresh process gets a fresh grace period if it later
+                    # exits 0 without a done message.
+                    exit0_since.pop(idx, None)
 
                 # Stagger startups: many simultaneous NVIDIA EGL/GLX context
                 # creations race inside the driver and can segfault workers.
@@ -584,6 +622,12 @@ class VideoExporter:
                     if now - last_fail_time.get(idx, 0.0) < 2.0:
                         return  # duplicate event for the same dead spawn
                     last_fail_time[idx] = now
+                    # Mark every known process for this segment as handled so
+                    # the dead-process reaper cannot double-count a failure that
+                    # has already been turned into a restart.
+                    for entry in procs:
+                        if entry[1] == idx:
+                            entry[2] = True
                     if attempts_left.get(idx, 0) > 0:
                         attempts_left[idx] -= 1
                         segment_progress[idx] = 0
@@ -605,9 +649,17 @@ class VideoExporter:
                         raise VideoExportCancelled("用户取消导出")
 
                     try:
-                        msg_type, worker_index, payload = progress_queue.get(timeout=0.2)
+                        msg_type, worker_index, msg_generation, payload = progress_queue.get(timeout=0.2)
                     except queue.Empty:
-                        msg_type, worker_index, payload = None, None, None
+                        msg_type, worker_index, msg_generation, payload = None, None, None, None
+
+                    # Ignore messages from a previous generation: after a worker
+                    # is restarted, stale error/progress/done messages from the
+                    # dead spawn must not affect the replacement.
+                    if msg_type is not None:
+                        expected_generation = generation_counter.get(worker_index, -1) - 1
+                        if worker_index not in generation_counter or msg_generation != expected_generation:
+                            continue
 
                     if msg_type == "progress":
                         segment_progress[worker_index] = int(payload)
@@ -624,14 +676,30 @@ class VideoExporter:
                     elif msg_type == "done":
                         segment_outputs[worker_index] = str(payload)
                         done_segments.add(worker_index)
+                        exit0_since.pop(worker_index, None)
                     elif msg_type == "error":
                         handle_failure(worker_index, str(payload))
 
                     # Reap silently-dead workers (segfault etc.) and retry them.
+                    # Also catch workers that exit 0 without ever reporting done;
+                    # otherwise the export could wait forever for a missing segment.
                     for entry in procs:
-                        proc, idx = entry
-                        if idx not in done_segments and not proc.is_alive() and proc.exitcode not in (None, 0):
-                            handle_failure(idx, f"渲染子进程异常退出 (code={proc.exitcode})")
+                        proc, idx, handled = entry
+                        if handled or idx in done_segments:
+                            continue
+                        if not proc.is_alive():
+                            if proc.exitcode == 0:
+                                # A normal exit usually means "done" is already
+                                # in the queue. Give the message a short grace
+                                # period before treating it as a silent failure,
+                                # so we do not restart a successful segment just
+                                # because its done message was slightly delayed.
+                                if idx not in exit0_since:
+                                    exit0_since[idx] = time.monotonic()
+                                elif time.monotonic() - exit0_since[idx] >= 1.0:
+                                    handle_failure(idx, f"渲染子进程退出 (code={proc.exitcode})")
+                            else:
+                                handle_failure(idx, f"渲染子进程退出 (code={proc.exitcode})")
 
                 for entry in procs:
                     entry[0].join()
@@ -743,6 +811,18 @@ class VideoExporter:
         ]
         return self._append_output_args(cmd, track, options)
 
+    def _can_concat_copy(self, options: VideoExportOptions) -> bool:
+        """Whether parallel segment files can be concatenated with stream copy.
+
+        This is only safe when the segment intermediates were encoded with the
+        same hardware codec as the requested output.  It skips the second
+        hardware-encoder pass, which is a major win for 4K/high-fps exports.
+        """
+        return (
+            options.video_codec in _HARDWARE_CONCAT_CODECS
+            and not options.extra_ffmpeg_args.strip()
+        )
+
     def _build_concat_ffmpeg_command(self, track: Track, options: VideoExportOptions, concat_list: Path) -> list[str]:
         cmd = [
             self.ffmpeg_path,
@@ -763,6 +843,25 @@ class VideoExporter:
             # The hwupload filter in the AMF output chain needs an explicit
             # D3D11 device, same as the rawvideo pipeline.
             cmd += ["-init_hw_device", "d3d11va=amf:0", "-filter_hw_device", "amf"]
+
+        if self._can_concat_copy(options):
+            # Segments were already encoded with the final hardware codec, so
+            # only the video stream is copied; audio (if any) is still encoded
+            # to a browser-friendly codec.
+            if options.include_audio:
+                cmd += ["-i", track.file_path, "-map", "0:v:0", "-map", "1:a:0?"]
+            else:
+                cmd += ["-map", "0:v:0"]
+            cmd += ["-c:v", "copy"]
+            if options.include_audio:
+                cmd += ["-c:a", options.audio_codec, "-b:a", options.audio_bitrate, "-shortest"]
+            else:
+                cmd += ["-an"]
+            if Path(options.output_path).suffix.lower() in {".mp4", ".m4v"}:
+                cmd += ["-movflags", "+faststart"]
+            cmd += [options.output_path]
+            return cmd
+
         return self._append_output_args(cmd, track, options)
 
     def _append_output_args(self, cmd: list[str], track: Track, options: VideoExportOptions) -> list[str]:

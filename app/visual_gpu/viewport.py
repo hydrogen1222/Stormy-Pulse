@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import time
+from typing import Optional
 
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtWidgets import QApplication, QWidget
@@ -25,6 +26,7 @@ class VisualizerViewport(QWidget):
         self.track_lyrics = None
         self.playback_position = 0.0
         self._last_fbo_watchdog = 0.0
+        self._render_count = 0
         self._offscreen_composite_cache: Optional[QImage] = None
         self.gl_widget = OpenGLSceneWidget(self.scene, self)
         self.overlay = HudOverlayRenderer(self.scene, self)
@@ -132,6 +134,7 @@ class VisualizerViewport(QWidget):
             self.resize(width, height)
             self.gl_widget.resize(width, height)
             self.overlay.resize(width, height)
+            self._render_count = 0
 
         self.gl_widget.frame_dt = frame_dt
         self.overlay.frame_dt = frame_dt
@@ -143,8 +146,14 @@ class VisualizerViewport(QWidget):
             self.show()
             QApplication.processEvents()
 
+        # repaint() is synchronous for QWidget, so an event-loop spin is only
+        # needed during the first frames / periodically to let Qt finalize the
+        # GL surface.  Skipping it on every frame measurably reduces export
+        # overhead (especially at 4K120).
         self.gl_widget.repaint()
-        QApplication.processEvents()
+        self._render_count += 1
+        if self._render_count <= 2 or self._render_count % 30 == 0:
+            QApplication.processEvents()
 
         scene_image = self.gl_widget.grabFramebuffer()
         if scene_image.isNull() or scene_image.width() <= 0 or scene_image.height() <= 0:
