@@ -208,3 +208,23 @@ def test_state_reports_job_and_phase(client):
     # The front-end polls `phase`/`job`; there is no `analyzing` key.
     assert "phase" in state and "job" in state
     assert "analyzing" not in state
+
+
+# ---------------------------------------------------------------------------
+# Visual smoothing: a long frame (stall) must not overshoot the target
+# ---------------------------------------------------------------------------
+def test_ring_and_core_smoothing_do_not_overshoot_on_long_dt():
+    from app.visual.energy_core import EnergyCore
+    from app.visual.ring_layer import RingLayer
+
+    ring = RingLayer(ring_count=5)
+    ring.update([1.0] * 8, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, False, 120, dt=0.25)
+    assert 0.0 <= ring.bass_pulse <= 5.8 + 1e-9
+    assert 0.0 <= ring.overall_pulse <= 3.8 + 1e-9
+    assert all(r >= 0.0 for r in ring.ring_radii)
+    assert all(t > 0.0 for t in ring.ring_thickness)
+
+    core = EnergyCore()
+    core.update(0.0, 0.0, 0.0, 0.0, dt=0.25)  # target far below current size
+    assert core.size > 0.0
+    assert core.get_state()["brightness"] >= 0.0

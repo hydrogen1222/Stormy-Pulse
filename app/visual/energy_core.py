@@ -51,15 +51,15 @@ class EnergyCore:
 
         target_size = 66.0 + self.rms_env * 118.0 + self.bass_env * 60.0 + beat_push + breathing
         if target_size > self.size:
-            self.size += (target_size - self.size) * 0.16 * sf
+            self.size += (target_size - self.size) * min(1.0, 0.16 * sf)
         else:
-            self.size += (target_size - self.size) * 0.07 * sf
+            self.size += (target_size - self.size) * min(1.0, 0.07 * sf)
              
         target_brightness = min(
             1.18,
             0.72 + self.energy_env * 0.22 + self.beat_env * 0.24 + self.rms_env * 0.10,
         )
-        self.brightness += (target_brightness - self.brightness) * 0.14 * sf
+        self.brightness += (target_brightness - self.brightness) * min(1.0, 0.14 * sf)
         
         self.inner_rotation += (0.045 + self.bass_env * 0.10 + self.beat_env * 0.12) * sf
         self.outer_rotation -= (0.032 + self.energy_env * 0.07 + self.beat_env * 0.09) * sf
