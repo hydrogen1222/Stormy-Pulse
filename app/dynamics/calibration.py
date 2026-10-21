@@ -8,6 +8,12 @@ from dataclasses import dataclass
 import numpy as np
 
 
+# Frames quieter than this (relative to the loudest frame) count as silence when
+# computing the dB calibration range.
+_SILENCE_FLOOR_DB = -60.0
+_MIN_AUDIBLE_FRAMES = 8
+
+
 @dataclass(frozen=True)
 class TrackCalibration:
     """Robust scaling percentile limits computed across a full track."""
@@ -36,8 +42,15 @@ class TrackCalibration:
         max_rms = max(eps, float(np.max(valid_rms))) if len(valid_rms) > 0 else 1.0
         rms_db = 20.0 * np.log10((valid_rms + eps) / (max_rms + eps))
 
-        rms_p10 = float(np.percentile(rms_db, 10)) if len(rms_db) > 0 else -40.0
-        rms_p95 = float(np.percentile(rms_db, 95)) if len(rms_db) > 0 else 0.0
+        # Digital silence (fade-in/out, gaps) sits at the epsilon floor (~-120 dB).
+        # Letting it into the percentiles drags P10 down to the floor on any track
+        # with >10% silence, which stretches the dB range and squashes the real
+        # dynamics into the top of [0, 1]. Calibrate on the audible frames only.
+        audible = rms_db[rms_db > _SILENCE_FLOOR_DB]
+        calib_db = audible if len(audible) >= _MIN_AUDIBLE_FRAMES else rms_db
+
+        rms_p10 = float(np.percentile(calib_db, 10)) if len(calib_db) > 0 else -40.0
+        rms_p95 = float(np.percentile(calib_db, 95)) if len(calib_db) > 0 else 0.0
 
         v_flux = flux_arr[np.isfinite(flux_arr)] if flux_arr is not None else np.array([])
         flx_p95 = max(eps, float(np.percentile(v_flux, 95))) if len(v_flux) > 0 else 1.0

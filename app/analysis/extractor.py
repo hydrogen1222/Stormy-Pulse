@@ -9,6 +9,8 @@ from typing import Optional
 import logging
 import time
 import hashlib
+import shutil
+import subprocess
 
 from ..config.constants import CACHE_VERSION
 from ..core.cpu_affinity import pin_current_thread_to_core
@@ -41,6 +43,41 @@ class FeatureExtractor:
         self.hop_length = HOP_LENGTH
         self.n_fft = FFT_SIZE
 
+    def _load_audio(self, file_path: str):
+        """Decode ``file_path`` to a mono float array. Returns ``(y, sample_rate)``.
+
+        libsndfile handles wav/flac/ogg/mp3 but not AAC/M4A (both advertised in
+        SUPPORTED_FORMATS), so fall back to ffmpeg, then to librosa/audioread.
+        """
+        try:
+            y, sr = sf.read(file_path)
+            if y.ndim > 1:
+                y = np.mean(y, axis=1)
+            return y, sr
+        except Exception as sf_err:
+            logger.info(f"soundfile could not read {file_path} ({sf_err}); trying ffmpeg")
+
+        if shutil.which("ffmpeg"):
+            try:
+                proc = subprocess.run(
+                    [
+                        "ffmpeg", "-v", "error", "-nostdin", "-i", str(file_path),
+                        "-vn", "-ac", "1", "-ar", str(self.sr), "-f", "f32le", "-",
+                    ],
+                    capture_output=True,
+                    timeout=600,
+                )
+                if proc.returncode == 0 and proc.stdout:
+                    return np.frombuffer(proc.stdout, dtype=np.float32).astype(np.float64), self.sr
+                logger.warning(
+                    "ffmpeg decode failed: %s", proc.stderr.decode("utf-8", errors="ignore").strip()
+                )
+            except Exception as ff_err:
+                logger.warning(f"ffmpeg decode error: {ff_err}")
+
+        y, sr = librosa.load(file_path, sr=None, mono=True)  # audioread backend; may raise
+        return y, sr
+
     def extract(self, file_path: str, progress_callback=None) -> Optional[FeatureCache]:
         """
         Extract all features from an audio file.
@@ -51,10 +88,9 @@ class FeatureExtractor:
 
             # --- STAGE A: Preprocessing ---
             if progress_callback: progress_callback(0, 100, "Loading audio...")
-            y, orig_sr = sf.read(file_path)
-            
-            if len(y.shape) > 1:
-                y = np.mean(y, axis=1)
+            y, orig_sr = self._load_audio(file_path)
+            if y is None or len(y) < self.n_fft:
+                raise ValueError("Audio is empty or too short to analyze")
 
             if orig_sr != self.sr:
                 if progress_callback: progress_callback(5, 100, "Resampling...")
@@ -106,13 +142,13 @@ class FeatureExtractor:
                 f_centroid = _submit(compute_spectral_centroid, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
                 f_rolloff = _submit(compute_spectral_rolloff, S_power, librosa.fft_frequencies(sr=sr, n_fft=self.n_fft))
                 f_bandwidth = _submit(compute_spectral_bandwidth, S_mag, sr, self.n_fft)
-                f_flatness = _submit(compute_spectral_flatness, S_power, self.hop_length)
+                f_flatness = _submit(compute_spectral_flatness, S_mag, self.hop_length)
                 f_flux = _submit(compute_spectral_flux, S_mag)
                 f_onset = _submit(compute_onset_strength, y_percussive, sr, self.hop_length) # Use percussive for cleaner onsets
                 f_zcr = _submit(compute_zero_crossing_rate, y, self.n_fft, self.hop_length)
                 f_harm_e = _submit(compute_rms, y_harmonic, self.n_fft, self.hop_length)
                 f_perc_e = _submit(compute_rms, y_percussive, self.n_fft, self.hop_length)
-                f_chroma = _submit(compute_chroma, None, sr, self.hop_length, S_harm_mag, self.n_fft)
+                f_chroma = _submit(compute_chroma, None, sr, self.hop_length, S_harm_mag ** 2, self.n_fft)
                 f_contrast = _submit(compute_spectral_contrast, S_mag, sr)
 
                 rms = f_rms.result()
@@ -226,7 +262,9 @@ class FeatureExtractor:
 
             # --- METADATA ---
             stat = Path(file_path).stat()
-            hash_str = f"{file_path}_{stat.st_size}_{stat.st_mtime}"
+            # Name + size only (no absolute path / mtime): the visual seed derived
+            # from this hash must not change when the same file is moved or copied.
+            hash_str = f"{Path(file_path).name}_{stat.st_size}"
             file_hash = hashlib.md5(hash_str.encode()).hexdigest()
             
             metadata = TrackAnalysisMetadata(
@@ -237,32 +275,6 @@ class FeatureExtractor:
                 sample_rate=sr,
                 analysis_timestamp=time.time()
             )
-
-            # Debug: 10s window BASS/RMS correlation
-            try:
-                frame_rate = sr / self.hop_length
-                sample_frames = int(10 * frame_rate)
-                if n_frames > sample_frames:
-                    # Pick a 10s segment from the middle
-                    start_idx = n_frames // 2
-                    end_idx = start_idx + sample_frames
-                    rms_seg = rms[start_idx:end_idx]
-                    bass_seg = bands["bass"][start_idx:end_idx]
-                    
-                    rms_min, rms_max, rms_mean = np.min(rms_seg), np.max(rms_seg), np.mean(rms_seg)
-                    bass_min, bass_max, bass_mean = np.min(bass_seg), np.max(bass_seg), np.mean(bass_seg)
-                    correlation = np.corrcoef(rms_seg, bass_seg)[0, 1] if np.std(rms_seg) > 0 and np.std(bass_seg) > 0 else 0
-                    
-                    print(f"\n[Debug] 10s Segment Stats (Middle):")
-                    print(f"  RMS : min={rms_min:.3f}, max={rms_max:.3f}, mean={rms_mean:.3f}")
-                    print(f"  BASS: min={bass_min:.3f}, max={bass_max:.3f}, mean={bass_mean:.3f}")
-                    print(f"  Correlation (RMS vs BASS): {correlation:.3f}")
-                    if correlation > 0.8:
-                        print("  Warning: BASS is highly correlated with RMS. They might look similar.")
-                    else:
-                        print("  Success: BASS is distinct from RMS.")
-            except Exception as debug_e:
-                print(f"Debug stats failed: {debug_e}")
 
             if progress_callback: progress_callback(100, 100, "Done!")
 
@@ -378,8 +390,9 @@ class FeatureExtractor:
         # Adjust hue based on secondary strongest note (Harmonic complexity)
         sorted_notes = np.argsort(avg_chroma)[::-1]
         secondary_note_idx = sorted_notes[1]
-        interval = abs(secondary_note_idx - strongest_note_idx)
-        if interval in [3, 4, 7]: # Minor third, Major third, Perfect fifth
+        interval = int(secondary_note_idx - strongest_note_idx) % 12
+        interval = min(interval, 12 - interval)  # interval class (direction-independent)
+        if interval in (3, 4, 5):  # minor/major third, perfect fifth (≡ fourth)
              hue_base = (hue_base + 15) % 360 # Slight shift for harmonic richness
         
         # 2. Mood Prior

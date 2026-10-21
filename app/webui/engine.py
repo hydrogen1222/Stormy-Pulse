@@ -14,6 +14,7 @@ import os
 import shutil
 import subprocess
 import sys
+import threading
 import tempfile
 import time
 from pathlib import Path
@@ -143,51 +144,62 @@ class WebUISession:
         if progress_cb:
             progress_cb(10, "读取音频元数据...")
 
-        self.track = Track(stable_audio)
+        # Build everything into locals first and swap into the session at the end,
+        # so a failed analysis never leaves a half-updated (mixed old/new) session.
+        new_track = Track(stable_audio)
         # The stable copy's name is content-hashed for cache reuse; when the file
         # carries no embedded title tag, restore the original readable filename.
-        if self.track.metadata.title == Path(stable_audio).stem:
-            self.track.metadata.title = Path(audio_path).stem or self.track.metadata.title
-        self.lyrics_path = stable_lrc
+        if new_track.metadata.title == Path(stable_audio).stem:
+            new_track.metadata.title = Path(audio_path).stem or new_track.metadata.title
+        new_lyrics_path = stable_lrc or ""
         if stable_lrc:
             try:
-                self.track.lyrics = parse_lrc_file(stable_lrc)
+                new_track.lyrics = parse_lrc_file(stable_lrc)
             except Exception as exc:
                 print(f"[WebUI Engine] Failed to parse uploaded LRC: {exc}")
-                self.track.lyrics = None
+                new_track.lyrics = None
 
         def _on_extract_progress(current: int, total: int, msg: str):
             if progress_cb and total > 0:
                 pct = int(15 + (current / total) * 75)
                 progress_cb(min(pct, 90), f"分析音频特征: {msg}")
 
-        self.feature_cache = self.cache_manager.get_or_extract(
+        new_cache = self.cache_manager.get_or_extract(
             stable_audio,
             progress_callback=_on_extract_progress,
         )
 
-        if not self.feature_cache:
+        if not new_cache:
             raise RuntimeError("音频特征分析失败")
 
         if progress_cb:
             progress_cb(92, "构建动力学物理场...")
 
-        self.dynamics_bundle = None
+        new_bundle = None
         try:
-            self.dynamics_bundle = build_dynamics_bundle(self.feature_cache, simulation_hz=60.0)
+            new_bundle = build_dynamics_bundle(new_cache, simulation_hz=60.0)
         except Exception as e:
             print(f"[WebUI Engine] Dynamics compile warning: {e}")
 
         # Setup renderer
-        self.renderer = VisualizerRenderer()
-        self.renderer.resize(1280, 720)
-        self._base_features = self.feature_cache.global_features
+        new_renderer = VisualizerRenderer()
+        new_renderer.resize(1280, 720)
+        if new_bundle:
+            new_renderer.scene.set_dynamics_bundle(new_bundle)
+
+        # Commit: from here on nothing below may fail half-way without the
+        # session being consistent, so swap all fields together.
+        self.track = new_track
+        self.lyrics_path = new_lyrics_path
+        self.feature_cache = new_cache
+        self.dynamics_bundle = new_bundle
+        self.renderer = new_renderer
+        self._base_features = new_cache.global_features
         self._theme_signature = None
-        if self.dynamics_bundle:
-            self.renderer.scene.set_dynamics_bundle(self.dynamics_bundle)
+        self._live_last_t = None
         self._ensure_theme({})
 
-        f_hash = getattr(self.feature_cache.metadata, "file_hash", "")
+        f_hash = getattr(new_cache.metadata, "file_hash", "")
         self.renderer.set_track_info(
             self.track.metadata.title,
             self.track.metadata.artist,
@@ -415,6 +427,16 @@ class WebUISession:
     # ------------------------------------------------------------------
     # Preview clip
     # ------------------------------------------------------------------
+    @staticmethod
+    def _cleanup_old_clips(temp_dir: Path, keep: int = 3) -> None:
+        """Remove stale preview clips so the temp dir does not grow without bound."""
+        try:
+            clips = sorted(temp_dir.glob("preview_*.mp4"), key=lambda p: p.stat().st_mtime, reverse=True)
+            for old in clips[keep:]:
+                old.unlink(missing_ok=True)
+        except Exception:
+            pass
+
     def generate_preview_clip(
         self,
         start_time: float,
@@ -439,7 +461,8 @@ class WebUISession:
 
         temp_dir = Path(tempfile.gettempdir()) / "stormy_pulse_webui"
         temp_dir.mkdir(parents=True, exist_ok=True)
-        clip_path = temp_dir / f"preview_{int(time.time())}_{int(start_time)}.mp4"
+        self._cleanup_old_clips(temp_dir)
+        clip_path = temp_dir / f"preview_{int(time.time() * 1000)}_{int(start_time)}.mp4"
 
         start_t = max(0.0, min(float(start_time), self.feature_cache.duration - 0.5))
         end_t = min(start_t + duration, self.feature_cache.duration)
@@ -479,6 +502,11 @@ class WebUISession:
             renderer.set_track_info(title, artist, file_hash=f_hash)
 
             proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
+            stderr_chunks: list = []
+            stderr_reader = threading.Thread(
+                target=lambda: stderr_chunks.append(proc.stderr.read()), daemon=True
+            )
+            stderr_reader.start()
             try:
                 # Fast deterministic start state, then advance naturally.
                 renderer.scene.seek_interactive(start_t, width=float(width), height=float(height))
@@ -495,14 +523,29 @@ class WebUISession:
                         progress_cb(pct, f"渲染片段帧: {i}/{total_frames}")
 
                 proc.stdin.close()
-                stderr_text = proc.stderr.read().decode("utf-8", errors="ignore")
                 return_code = proc.wait(timeout=60)
+                stderr_reader.join(timeout=5)
                 if return_code != 0:
+                    stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="ignore")
                     raise RuntimeError(f"ffmpeg 编码预览片段失败: {stderr_text.strip() or return_code}")
+            except BrokenPipeError:
+                # ffmpeg exited early; surface its real error instead of the pipe error.
+                try:
+                    proc.wait(timeout=10)
+                except Exception:
+                    proc.kill()
+                stderr_reader.join(timeout=5)
+                stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="ignore")
+                clip_path.unlink(missing_ok=True)
+                raise RuntimeError(f"ffmpeg 编码预览片段失败: {stderr_text.strip() or '管道已关闭'}")
             except Exception:
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.close()
+                try:
+                    if proc.stdin and not proc.stdin.closed:
+                        proc.stdin.close()
+                except Exception:
+                    pass
                 proc.kill()
+                clip_path.unlink(missing_ok=True)
                 raise
 
         if progress_cb:

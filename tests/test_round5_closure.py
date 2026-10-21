@@ -28,9 +28,9 @@ from app.visual.particles import ParticleSystem
 from app.visual.scene import Scene
 
 
-def test_v6_cache_version():
-    """Verify CACHE_VERSION is bumped to v6."""
-    assert CACHE_VERSION == "v6", f"Expected v6 cache version, got {CACHE_VERSION}"
+def test_v7_cache_version():
+    """Verify CACHE_VERSION is bumped to v7."""
+    assert CACHE_VERSION == "v7", f"Expected v7 cache version, got {CACHE_VERSION}"
 
 
 def test_raw_band_shares_sum_and_spectral_tilt():

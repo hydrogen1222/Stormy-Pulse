@@ -9,6 +9,7 @@ const stage = $("stage");
 const state = {
   ready: false,
   analyzing: false,
+  job: 0,
   duration: 0,
   system: null,
   lastAudioFile: null,
@@ -221,13 +222,19 @@ async function pollState() {
     const r = await fetch("/api/state", { cache: "no-store" });
     const s = await r.json();
 
-    if (s.analyzing && !state.analyzing) beginAnalysisUI();
-    if (s.analyzing) {
-      $("analysisBar").style.width = `${s.progress}%`;
-      $("analysisMsg").textContent = `${s.message || "分析中..."} (${s.progress}%)`;
+    // The server reports analysis through `phase`; `job` lets us ignore a stale
+    // "ready"/"error" left over from the previous track right after an upload.
+    const sameJob = !state.job || s.job === state.job;
+    if (s.phase === "analyzing") {
+      if (!state.analyzing) beginAnalysisUI();
+      if (!state.job) state.job = s.job;
+      const pct = Math.max(0, Math.min(100, Math.round(s.progress || 0)));
+      $("analysisBar").style.width = `${pct}%`;
+      $("analysisMsg").textContent = `${s.message || "分析中..."} (${pct}%)`;
+    } else if (state.analyzing && sameJob) {
+      if (s.phase === "ready") onAnalysisDone(s);
+      else if (s.phase === "error") onAnalysisError(s.error || "分析失败");
     }
-    if (s.phase === "ready" && state.analyzing) onAnalysisDone(s);
-    if (s.phase === "error" && state.analyzing) onAnalysisError(s.error || "分析失败");
 
     syncExportUI(s.export || {});
   } catch (e) { /* server briefly unavailable */ }
@@ -245,6 +252,7 @@ function beginAnalysisUI() {
 
 function onAnalysisDone(s) {
   state.analyzing = false;
+  state.job = 0;
   state.ready = true;
   $("analysisMsg").textContent = "分析完成 ✓";
   setTimeout(() => $("analysisBox").classList.add("hidden"), 1200);
@@ -274,6 +282,7 @@ function onAnalysisDone(s) {
 
 function onAnalysisError(err) {
   state.analyzing = false;
+  state.job = 0;
   $("analysisBox").classList.add("hidden");
   showError(`❌ ${err}`);
   setHint("上传音频后将自动分析，点击 ▶ 开始实时播放");
@@ -323,7 +332,10 @@ $("audioFile").addEventListener("change", async (ev) => {
   const file = ev.target.files[0];
   if (!file) return;
   state.lastAudioFile = file;
-  await uploadAndAnalyze(file, $("lrcFile").files[0] || null);
+  const lrc = $("lrcFile").files[0] || null;
+  // The lyric file belongs to this upload only; don't let it leak into the next one.
+  await uploadAndAnalyze(file, lrc);
+  $("lrcFile").value = "";
   ev.target.value = "";
 });
 
@@ -332,6 +344,7 @@ $("lrcFile").addEventListener("change", async (ev) => {
   if (lrc && state.lastAudioFile) {
     await uploadAndAnalyze(state.lastAudioFile, lrc);  // re-analyze with lyrics
   }
+  ev.target.value = "";
 });
 
 async function uploadAndAnalyze(audioFile, lrcFile) {
@@ -347,6 +360,8 @@ async function uploadAndAnalyze(audioFile, lrcFile) {
       setHint("");
       return;
     }
+    const data = await r.json().catch(() => ({}));
+    state.job = data.job || 0;
     setHint("分析中，请稍候...");
     beginAnalysisUI();
   } catch (e) {
@@ -374,7 +389,12 @@ audio.addEventListener("timeupdate", () => {
   if (!seekDragging) $("seekBar").value = Math.round((audio.currentTime / state.duration) * 1000);
   $("curTime").textContent = fmtTime(audio.currentTime);
 });
-audio.addEventListener("durationchanged", () => {});
+audio.addEventListener("durationchange", () => {
+  if (isFinite(audio.duration) && audio.duration > 0) {
+    state.duration = audio.duration;
+    $("durTime").textContent = fmtTime(state.duration);
+  }
+});
 audio.addEventListener("loadedmetadata", () => {
   state.duration = audio.duration || 0;
   $("durTime").textContent = fmtTime(state.duration);

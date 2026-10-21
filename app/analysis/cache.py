@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional
 import hashlib
 import logging
+import os
+import tempfile
 
 from .features import FeatureCache, GlobalFeatureSet
 from .extractor import FeatureExtractor
@@ -58,7 +60,10 @@ class FeatureCacheManager:
             # Verify data integrity
             if not self._verify_cache(data, file_path):
                 logger.warning(f"Cache verification failed: {cache_path}")
-                cache_path.unlink()
+                try:
+                    cache_path.unlink()
+                except OSError:
+                    pass
                 return None
 
             logger.info(f"Loaded features from cache: {cache_path.name}")
@@ -78,13 +83,26 @@ class FeatureCacheManager:
 
         try:
             data = {
-                "file_path": file_path,
+                "file_path": file_path,  # informational only (cache key is name+size+mtime)
+                "file_name": Path(file_path).name,
                 "features": features,
                 "version": CACHE_VERSION,
             }
 
-            with gzip.open(cache_path, "wb") as f:
-                pickle.dump(data, f)
+            # Write to a temp file and rename: an interrupted save must never leave
+            # a truncated cache that later fails to load (or loads half-written).
+            fd, tmp_name = tempfile.mkstemp(dir=str(self.cache_dir), prefix=".tmp_", suffix=CACHE_EXT)
+            os.close(fd)
+            try:
+                with gzip.open(tmp_name, "wb") as f:
+                    pickle.dump(data, f)
+                os.replace(tmp_name, cache_path)
+            except BaseException:
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
+                raise
 
             logger.info(f"Saved features to cache: {cache_path.name}")
             return True
@@ -97,9 +115,9 @@ class FeatureCacheManager:
         """Verify cache integrity."""
         if "features" not in data:
             return False
-        if "file_path" not in data:
-            return False
-        if data["file_path"] != file_path:
+        # The cache key is portable (file name + size + mtime), so the absolute
+        # path may legitimately differ; compare the file name instead.
+        if data.get("file_name") != Path(file_path).name:
             return False
         if "version" not in data:
             return False
