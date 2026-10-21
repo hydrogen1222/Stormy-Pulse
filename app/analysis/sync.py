@@ -46,6 +46,12 @@ class VisualizationSync:
             logger.error(f"Error loading track features: {e}")
             return False
 
+    def set_features(self, features: Optional[FeatureCache]):
+        """Install already-extracted features (e.g. from a background worker)."""
+        self.feature_cache = features
+        self._current_frame = None
+        self._last_time = -1.0
+
     def seek_to(self, time_seconds: float):
         """Seek to a specific time position."""
         if self.feature_cache is None:

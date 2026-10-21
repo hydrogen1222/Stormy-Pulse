@@ -96,6 +96,15 @@ class VideoExportOptions:
     fast_segment_start: bool = False
 
 
+def _concat_quote(path) -> str:
+    """Quote a path for ffmpeg's concat demuxer list (``file '...'``).
+
+    Inside single quotes the only special character is the quote itself, which
+    must be written as ``'\\''`` (close quote, escaped quote, reopen quote).
+    """
+    return "'" + Path(path).as_posix().replace("'", "'\\''") + "'"
+
+
 def _write_image_to_stream(stream, image: QImage):
     if image.format() != QImage.Format.Format_RGBA8888:
         image = image.convertToFormat(QImage.Format.Format_RGBA8888)
@@ -425,6 +434,23 @@ class VideoExporter:
         progress_callback: Optional[ProgressCallback],
         cancel_check: Optional[CancelCheck],
     ) -> Path:
+        # The renderer/scene read the global settings (canvas ratio, HUD, fonts)
+        # while they are being constructed and configured, not just per frame, so
+        # the overrides must be active for the whole setup - the parallel/worker
+        # path already does this.
+        with settings.override(options.ui_overrides):
+            return self._export_track_sequential_impl(
+                track, feature_cache, options, progress_callback, cancel_check
+            )
+
+    def _export_track_sequential_impl(
+        self,
+        track: Track,
+        feature_cache: FeatureCache,
+        options: VideoExportOptions,
+        progress_callback: Optional[ProgressCallback],
+        cancel_check: Optional[CancelCheck],
+    ) -> Path:
         output_path = Path(options.output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -518,19 +544,33 @@ class VideoExporter:
                 self._report(progress_callback, 100, "导出完成")
                 return output_path
 
-            except Exception:
-                if proc.stdin and not proc.stdin.closed:
-                    proc.stdin.close()
+            except Exception as exc:
+                try:
+                    if proc.stdin and not proc.stdin.closed:
+                        proc.stdin.close()
+                except Exception:
+                    pass
                 proc.terminate()
                 try:
                     proc.wait(timeout=3)
                 except Exception:
                     proc.kill()
+                ffmpeg_error = ""
+                if isinstance(exc, OSError):  # BrokenPipeError etc.
+                    # ffmpeg died while we were feeding it frames: the pipe error is
+                    # just a symptom, ffmpeg's own stderr has the actual reason.
+                    try:
+                        if proc.stderr:
+                            ffmpeg_error = proc.stderr.read().decode("utf-8", errors="ignore").strip()
+                    except Exception:
+                        pass
                 if output_path.exists():
                     try:
                         output_path.unlink()
                     except Exception:
                         pass
+                if ffmpeg_error:
+                    raise VideoExportError(f"ffmpeg 编码失败: {ffmpeg_error}") from exc
                 raise
 
     def _export_track_parallel(
@@ -710,7 +750,7 @@ class VideoExporter:
                 concat_list = Path(temp_dir) / "segments.txt"
                 concat_list.write_text(
                     "".join(
-                        f"file '{Path(segment_outputs[idx]).as_posix()}'\n"
+                        f"file {_concat_quote(segment_outputs[idx])}\n"
                         for idx in range(len(frame_ranges))
                     ),
                     encoding="utf-8",

@@ -27,8 +27,11 @@ music-visualizer-web = "app.webui.server:main"
 [tool.uv]
 package = true
 
-[tool.setuptools]
-packages = ["app"]
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.setuptools.package-data]
+"app.webui" = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

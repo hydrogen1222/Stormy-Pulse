@@ -33,32 +33,33 @@ from ..config.settings import settings
 
 
 class AnalysisWorker(QObject):
-    """Worker for background feature extraction."""
-    finished = Signal(object)
-    progress = Signal(int, str)
-    error = Signal(str)
+    """Worker for background feature extraction.
 
-    def __init__(self, sync_manager, file_path):
+    Every signal carries the audio file path so the GUI can discard results that
+    belong to a track the user has already switched away from.
+    """
+    finished = Signal(object, str)
+    progress = Signal(int, str, str)
+    error = Signal(str, str)
+
+    def __init__(self, cache_manager, file_path):
         super().__init__()
-        self.sync_manager = sync_manager
+        self.cache_manager = cache_manager
         self.file_path = file_path
 
     def run(self):
         """Run extraction in background thread."""
         try:
-            # We use VisualizationSync.load_track which handles both extraction and caching
-            success = self.sync_manager.load_track(
-                self.file_path, 
-                lambda c, t, m: self.progress.emit(int(c/t*100) if t > 0 else 0, m)
+            features = self.cache_manager.get_or_extract(
+                self.file_path,
+                lambda c, t, m: self.progress.emit(int(c / t * 100) if t > 0 else 0, m, self.file_path),
             )
-            
-            if success:
-                features = self.sync_manager.feature_cache
-                self.finished.emit(features)
+            if features is not None:
+                self.finished.emit(features, self.file_path)
             else:
-                self.error.emit("特征提取失败")
+                self.error.emit("特征提取失败", self.file_path)
         except Exception as e:
-            self.error.emit(str(e))
+            self.error.emit(str(e), self.file_path)
 
 
 class MainWindow(QWidget):
@@ -80,6 +81,8 @@ class MainWindow(QWidget):
         # Threading for analysis
         self._analysis_thread = None
         self._analysis_worker = None
+        self._analysis_path = None      # file currently being analyzed by the thread
+        self._wanted_analysis_path = None  # file the user currently wants analyzed
         self._is_loading_track = False
         self._gpu_available = VisualizerViewport is not None
         self._render_backend = "cpu"
@@ -246,7 +249,13 @@ class MainWindow(QWidget):
         self.player_controls = PlayerControls()
         self.player_controls.set_enabled(False)
         right_panel.addWidget(self.player_controls)
-        self._set_render_backend("cpu", persist=True)
+        # Restore the user's saved backend (falls back to CPU if GPU is unavailable)
+        # instead of overwriting the saved choice on every launch.
+        try:
+            self._set_render_backend(str(self.settings.get("render_backend", "cpu")), persist=False)
+        except Exception as backend_err:  # e.g. GPU widget cannot be created on this machine
+            print(f"[MainWindow] Saved render backend unavailable ({backend_err}); using CPU")
+            self._set_render_backend("cpu", persist=False)
 
         main_layout.addLayout(right_panel, 1)
 
@@ -359,14 +368,18 @@ class MainWindow(QWidget):
             self,
             "选择音乐文件",
             "",
-            "音频文件 (*.mp3 *.flac *.wav *.m4a *.ogg);;所有文件 (*.*)",
+            "音频文件 (*.mp3 *.flac *.wav *.m4a *.ogg *.aac);;所有文件 (*.*)",
         )
 
         print(f"[MainWindow] Files selected: {len(files)}")
 
         for file_path in files:
+            before = self.music_library.get_track_count()
             track = self.music_library.add_track(file_path)
-            if track:
+            # add_track() returns the existing Track for duplicates; only add a
+            # playlist row when the library actually grew, or rows and library
+            # indices drift apart.
+            if track and self.music_library.get_track_count() > before:
                 self.playlist_panel.add_track(
                     track.metadata.title,
                     track.metadata.artist,
@@ -385,10 +398,11 @@ class MainWindow(QWidget):
 
     def _on_add_folder(self, folder: str):
         """Handle add folder."""
+        first_new = self.music_library.get_track_count()
         count = self.music_library.add_directory(folder)
         print(f"[MainWindow] Folder added: {folder}, found {count} tracks")
 
-        for track in self.music_library.tracks[-count:]:
+        for track in self.music_library.tracks[first_new:]:
             self.playlist_panel.add_track(
                 track.metadata.title,
                 track.metadata.artist,
@@ -397,15 +411,15 @@ class MainWindow(QWidget):
             )
 
         if count > 0 and not self.audio_player.current_track:
-            self.music_library.set_current_index(len(self.music_library.tracks) - count)
-            self._load_track(len(self.music_library.tracks) - count)
+            self.music_library.set_current_index(first_new)
+            self._load_track(first_new)
 
     def _on_track_selected(self, index: int):
         """Handle track selection."""
         print(f"[MainWindow] Track selected: index={index}")
         self._load_track(index)
 
-    def _load_track(self, index: int):
+    def _load_track(self, index: int, autoplay: bool = False):
         """Load a track by index with complete reset."""
         if self._is_loading_track:
             return
@@ -440,8 +454,11 @@ class MainWindow(QWidget):
             self.artist_label.setText(f"{artist}{album_info}")
             
             # Check cache explicitly for logging
-            cache_path = self.visualization_sync.cache_manager.get_cache_path(track.metadata.file_path)
-            has_cache = cache_path.exists()
+            try:
+                cache_path = self.visualization_sync.cache_manager.get_cache_path(track.metadata.file_path)
+                has_cache = cache_path.exists()
+            except OSError:  # file moved/deleted since it was added to the library
+                cache_path, has_cache = None, False
             print(f"[SwitchTrack] Cache: {'HIT' if has_cache else 'MISS'}")
             if has_cache:
                 print(f"[SwitchTrack] CacheKey: {cache_path.name}")
@@ -467,42 +484,76 @@ class MainWindow(QWidget):
             self.player_controls.set_enabled(True)
             self.player_controls.set_duration(track.metadata.duration)
 
-            # Background analysis
-            try:
-                if self._analysis_thread and self._analysis_thread.isRunning():
-                    self._analysis_thread.terminate()
-                    self._analysis_thread.wait()
-            except RuntimeError:
-                pass # Thread was already deleted
+            # Background analysis (one worker at a time; see _request_analysis)
+            self._request_analysis(track.metadata.file_path)
 
-            self._analysis_thread = QThread()
-            self._analysis_worker = AnalysisWorker(self.visualization_sync, track.metadata.file_path)
-            self._analysis_worker.moveToThread(self._analysis_thread)
-
-            # Cleanup references to avoid RuntimeError
-            def cleanup():
-                self._analysis_thread = None
-                self._analysis_worker = None
-
-            self._analysis_thread.started.connect(self._analysis_worker.run)
-            self._analysis_worker.finished.connect(self._on_analysis_finished)
-            self._analysis_worker.progress.connect(self._on_analysis_progress)
-            self._analysis_worker.error.connect(self._on_analysis_error)
-
-            self._analysis_worker.finished.connect(self._analysis_thread.quit)
-            self._analysis_worker.finished.connect(self._analysis_worker.deleteLater)
-            self._analysis_thread.finished.connect(self._analysis_thread.deleteLater)
-            self._analysis_thread.finished.connect(cleanup)
-
-            self._analysis_thread.start()
+            if autoplay:
+                self.audio_player.play()
         finally:
             self._is_loading_track = False
-    def _on_analysis_progress(self, percent, message):
+
+    def _request_analysis(self, file_path: str):
+        """Analyze ``file_path`` on a worker thread.
+
+        Never terminate a running worker (that can kill it mid-write and leaves
+        Qt/cache state inconsistent): remember the latest wish and let the
+        in-flight job finish; its result is discarded if it is stale, and the
+        wanted track is analyzed right after.
+        """
+        self._wanted_analysis_path = file_path
+        if self._analysis_thread is None:
+            self._start_analysis_thread(file_path)
+
+    def _start_analysis_thread(self, file_path: str):
+        thread = QThread()
+        worker = AnalysisWorker(self.visualization_sync.cache_manager, file_path)
+        worker.moveToThread(thread)
+        self._analysis_thread = thread
+        self._analysis_worker = worker
+        self._analysis_path = file_path
+
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_analysis_finished)
+        worker.progress.connect(self._on_analysis_progress)
+        worker.error.connect(self._on_analysis_error)
+
+        # Both outcomes must stop the thread's event loop (previously only the
+        # success path did, so a failed analysis leaked a running QThread).
+        worker.finished.connect(thread.quit)
+        worker.error.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        worker.error.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(lambda t=thread: self._on_analysis_thread_finished(t))
+
+        thread.start()
+
+    def _on_analysis_thread_finished(self, thread):
+        # Only clear the references if they still belong to the thread that just
+        # ended - a newer thread may already own them.
+        if self._analysis_thread is thread:
+            self._analysis_thread = None
+            self._analysis_worker = None
+            finished_path = self._analysis_path
+            self._analysis_path = None
+            wanted = self._wanted_analysis_path
+            if wanted and wanted != finished_path:
+                self._start_analysis_thread(wanted)
+
+    def _is_current_analysis(self, file_path: str) -> bool:
+        return bool(file_path) and file_path == self._wanted_analysis_path
+
+    def _on_analysis_progress(self, percent, message, file_path=""):
         """Update analysis progress in UI."""
+        if file_path and not self._is_current_analysis(file_path):
+            return
         self.status_label.setText(f"分析中... {percent}% ({message})")
 
-    def _on_analysis_finished(self, features):
+    def _on_analysis_finished(self, features, file_path=""):
         """Handle analysis completion and sync visualization."""
+        if file_path and not self._is_current_analysis(file_path):
+            print(f"[MainWindow] Discarding stale analysis result for {file_path}")
+            return
         if features:
             f = features.globals
             s = features.semantics
@@ -521,7 +572,7 @@ class MainWindow(QWidget):
             print("="*60 + "\n")
             
             # Reset sync with new cache
-            self.visualization_sync.feature_cache = features
+            self.visualization_sync.set_features(features)
 
             # Compile V2 Dynamics Bundle
             try:
@@ -530,7 +581,6 @@ class MainWindow(QWidget):
                 self.visualizer.scene.set_dynamics_bundle(bundle)
                 print(f"[Dynamics V2] Attached MaterialTrajectory with {len(bundle.material_trajectory.states)} 60Hz states.")
             except Exception as dyn_err:
-                print(f"[Dynamics V2 Compile Error] {dyn_err}")
                 print(f"[Dynamics V2 Compile Error] {dyn_err}")
 
             # This triggers theme creation
@@ -559,8 +609,10 @@ class MainWindow(QWidget):
         else:
             self.status_label.setText("分析失败: 无有效特征")
 
-    def _on_analysis_error(self, error_msg):
+    def _on_analysis_error(self, error_msg, file_path=""):
         """Handle analysis error."""
+        if file_path and not self._is_current_analysis(file_path):
+            return
         print(f"[MainWindow] Analysis error: {error_msg}")
         self.status_label.setText(f"分析失败: {error_msg}")
 
@@ -683,16 +735,18 @@ class MainWindow(QWidget):
     def _on_previous(self):
         """Handle previous."""
         print("[MainWindow] Previous clicked")
+        was_playing = self.audio_player.is_playing()
         track = self.music_library.previous_track()
         if track:
-            self._load_track(self.music_library.current_index)
+            self._load_track(self.music_library.current_index, autoplay=was_playing)
 
     def _on_next(self):
         """Handle next."""
         print("[MainWindow] Next clicked")
+        was_playing = self.audio_player.is_playing()
         track = self.music_library.next_track()
         if track:
-            self._load_track(self.music_library.current_index)
+            self._load_track(self.music_library.current_index, autoplay=was_playing)
 
     def _on_seek(self, position: float):
         """Handle seek with O(1) fast interactive seek."""
@@ -731,14 +785,23 @@ class MainWindow(QWidget):
 
     def _on_playback_state_changed(self, is_playing: bool):
         """Handle playback state change from Qt."""
-        print(f"[MainWindow] playbackStateChanged signal: is_playing={is_playing}")
-        print(f"[MainWindow] Qt player state: {self.audio_player._player.playbackState()}")
+        # The Qt player is the source of truth: keeps the play button correct when
+        # playback starts/stops without a click (auto-advance, end of media, errors).
+        self.player_controls.set_playing(bool(is_playing))
 
     def _on_end_of_track(self):
         """Handle end of track."""
         print("[MainWindow] End of track")
         self.player_controls.set_playing(False)
-        self._on_next()
+        count = self.music_library.get_track_count()
+        if count == 0:
+            return
+        # Continue with the next song; after the last one wrap to the first but
+        # stay paused instead of looping forever.
+        is_last = self.music_library.current_index >= count - 1
+        track = self.music_library.next_track()
+        if track:
+            self._load_track(self.music_library.current_index, autoplay=not is_last)
 
     def _apply_app_theme_style(self, theme_name: str = "dark"):
         """Apply high-contrast theme stylesheet for Dark / Light modes across all UI controls."""
@@ -1402,5 +1465,17 @@ class MainWindow(QWidget):
         self.audio_player.stop()
         self.visualizer.stop()
         self.update_timer.stop()
+        # Don't leave a running QThread behind ("Destroyed while thread is still
+        # running" aborts the process): stop chaining new jobs and wait briefly.
+        self._wanted_analysis_path = None
+        thread = self._analysis_thread
+        try:
+            if thread is not None and thread.isRunning():
+                thread.quit()
+                if not thread.wait(5000):
+                    thread.terminate()  # last resort at shutdown only
+                    thread.wait(1000)
+        except RuntimeError:
+            pass  # underlying C++ thread object already deleted
         print(f"[MainWindow] Total _on_update calls: {self._update_count}")
         super().closeEvent(event)

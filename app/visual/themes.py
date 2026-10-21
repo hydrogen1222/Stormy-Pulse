@@ -288,9 +288,7 @@ class Theme:
 
         self.structure_type = features.structure_type
         self.detail_style = features.detail_style
-        self.motion_profile = getattr(
-            features, "motion_性格", getattr(features, "motion_鎬ф牸", "steady"),
-        )
+        self.motion_profile = getattr(features, "motion_性格", "steady")
         self.palette_type = features.palette_type
 
         # Base DNA

@@ -32,6 +32,7 @@ class AudioPlayer(QObject):
         self._player.positionChanged.connect(self._on_position_changed)
         self._player.durationChanged.connect(self._on_duration_changed)
         self._player.playbackStateChanged.connect(self._on_playback_state_changed)
+        self._player.mediaStatusChanged.connect(self._on_media_status_changed)
 
     def load_track(self, track: Track):
         """Load a track for playback."""
@@ -96,8 +97,12 @@ class AudioPlayer(QObject):
         self.playback_state.is_playing = is_playing
         self.playback_state_changed.emit(is_playing)
 
-        if (
-            not is_playing
-            and self.playback_state.position >= self.playback_state.duration - 0.5
-        ):
+    def _on_media_status_changed(self, status):
+        """Emit end_of_track only when the media really played to its end.
+
+        (The previous heuristic - "not playing and near the end" - also fired when
+        pausing/stopping in the last half second or while the duration was still 0,
+        which skipped tracks spuriously.)
+        """
+        if status == QMediaPlayer.MediaStatus.EndOfMedia:
             self.end_of_track.emit()

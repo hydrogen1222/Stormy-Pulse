@@ -13,12 +13,17 @@ from __future__ import annotations
 
 import argparse
 import io
+import math
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
 import threading
 import time
+import urllib.parse
+import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -53,6 +58,7 @@ _state_lock = threading.Lock()
 
 _state: Dict[str, Any] = {
     "phase": "idle",       # idle | analyzing | ready | error
+    "job": 0,              # increments per analysis so clients can ignore stale phases
     "progress": 0,
     "message": "",
     "error": "",
@@ -235,17 +241,26 @@ def _run_analysis(audio_path: str, lrc_path: Optional[str]) -> None:
             _state["message"] = f"分析失败: {exc}"
 
 
-def _start_analysis(audio_path: str, lrc_path: Optional[str]) -> bool:
+def _start_analysis(audio_path: str, lrc_path: Optional[str]) -> int:
+    """Start an analysis job; returns its job id, or 0 when one is already running."""
     global _analysis_thread
     with _state_lock:
         if _state["phase"] == "analyzing":
-            return False
-        _state.update(phase="analyzing", progress=0, message="准备分析...", error="", track=None)
+            return 0
+        job = int(_state.get("job", 0)) + 1
+        _state.update(
+            phase="analyzing", job=job, progress=0, message="准备分析...", error="", track=None, clip_url=""
+        )
     _analysis_thread = threading.Thread(
         target=_run_analysis, args=(audio_path, lrc_path), daemon=True
     )
     _analysis_thread.start()
-    return True
+    return job
+
+
+def _analysis_running() -> bool:
+    with _state_lock:
+        return _state["phase"] == "analyzing"
 
 
 # ---------------------------------------------------------------------------
@@ -403,7 +418,7 @@ def _run_gpu_export(
         except Exception:
             pass
         try:
-            if _state_lock and _state["export"].get("phase") == "running":
+            if _export_running():
                 _set_export_state(phase="error", error="GPU 导出进程提前退出", message="导出失败")
         except Exception:
             pass
@@ -444,10 +459,15 @@ def api_state() -> Dict[str, Any]:
 
 @app.post("/api/upload")
 async def api_upload(audio: UploadFile = File(...), lrc: Optional[UploadFile] = File(None)) -> Dict[str, Any]:
+    if _analysis_running():
+        raise HTTPException(status_code=409, detail="已有分析任务在进行中")
+    if _export_running():
+        raise HTTPException(status_code=409, detail="正在后台导出视频，请等待导出结束或取消后再上传")
+
     tmp_dir = Path(tempfile.gettempdir()) / "stormy_pulse_uploads"
     # Per-upload subfolder keeps the original filename intact (it doubles as the
     # fallback track title) without collisions between uploads.
-    upload_dir = tmp_dir / f"u{int(time.time() * 1000)}"
+    upload_dir = tmp_dir / f"u{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
     upload_dir.mkdir(parents=True, exist_ok=True)
 
     def _temp_name(upload: UploadFile, default_suffix: str) -> Path:
@@ -468,10 +488,11 @@ async def api_upload(audio: UploadFile = File(...), lrc: Optional[UploadFile] = 
             while chunk := await lrc.read(1 << 20):
                 f.write(chunk)
 
-    started = _start_analysis(str(audio_tmp), str(lrc_tmp) if lrc_tmp else None)
-    if not started:
+    job = _start_analysis(str(audio_tmp), str(lrc_tmp) if lrc_tmp else None)
+    if not job:
+        shutil.rmtree(upload_dir, ignore_errors=True)
         raise HTTPException(status_code=409, detail="已有分析任务在进行中")
-    return {"started": True}
+    return {"started": True, "job": job}
 
 
 _PARAM_FLOAT_KEYS = frozenset({
@@ -517,6 +538,8 @@ def api_frame(t: float = 0.0, w: int = 0, h: int = 0, mode: str = "still", playi
         raise HTTPException(status_code=409, detail="尚未加载音频，请先上传")
 
     width, height = _frame_size(params["aspect"], params["frame_height"], w, h)
+    if not math.isfinite(t):
+        t = 0.0
     t = max(0.0, min(float(t), _session.feature_cache.duration))
 
     with _render_lock:
@@ -545,6 +568,7 @@ _AUDIO_MIME = {
 # Browsers play these containers/codecs reliably everywhere; anything else
 # (ogg/opus on Safari, ALAC in m4a, exotic codecs) gets an AAC sidecar copy.
 _NATIVE_AUDIO_EXTS = {".mp3", ".wav", ".flac"}
+_transcode_lock = threading.Lock()
 
 
 def _ensure_playable_audio(force_recode: bool = False, allow_transcode: bool = True) -> Path:
@@ -571,33 +595,45 @@ def _ensure_playable_audio(force_recode: bool = False, allow_transcode: bool = T
         return src
 
     sidecar = src.parent / f"{src.stem}_web.m4a"
-    if not sidecar.is_file():
-        import shutil
-        import subprocess
-
-        if shutil.which("ffmpeg") is None:
-            return src  # no ffmpeg available: serve as-is and let the browser try
+    if force_recode and sidecar.is_file():
+        # A forced re-encode means the cached sidecar was not playable.
         try:
-            proc = subprocess.run(
-                [
-                    "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
-                    "-i", str(src),
-                    "-c:a", "aac", "-b:a", "256k",
-                    str(sidecar),
-                ],
-                capture_output=True,
-                timeout=180,
-            )
-        except Exception:
-            return src  # ffmpeg missing/hung/failed: fall back to the original file
-        if proc.returncode != 0 or not sidecar.is_file():
-            return src  # transcode failed: fall back to the original file
+            sidecar.unlink()
+        except OSError:
+            pass
+    with _transcode_lock:  # browsers fire parallel range requests; transcode once
+        if not sidecar.is_file():
+            if shutil.which("ffmpeg") is None:
+                return src  # no ffmpeg available: serve as-is and let the browser try
+            partial = sidecar.with_name(f"{sidecar.stem}.part{sidecar.suffix}")
+            try:
+                proc = subprocess.run(
+                    [
+                        "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                        "-i", str(src),
+                        "-vn", "-c:a", "aac", "-b:a", "256k",
+                        str(partial),
+                    ],
+                    capture_output=True,
+                    timeout=180,
+                )
+            except Exception:
+                partial.unlink(missing_ok=True)
+                return src  # ffmpeg missing/hung/failed: fall back to the original file
+            if proc.returncode != 0 or not partial.is_file():
+                partial.unlink(missing_ok=True)
+                return src  # transcode failed: fall back to the original file
+            os.replace(partial, sidecar)  # atomic: readers never see a half-written file
 
     return sidecar
 
 
 @app.get("/api/audio")
 def api_audio(range_header: Optional[str] = Header(None, alias="Range"), recode: int = 0):
+    if _analysis_running():
+        # Analysis holds the render lock for a long time; fail fast instead of
+        # parking a worker thread (and the browser's <audio> request) behind it.
+        raise HTTPException(status_code=503, detail="正在分析音频，请稍候")
     with _render_lock:
         # Only validate/resolve the source under the lock.  Transcoding (if
         # needed) happens below without the render lock so live frames keep
@@ -659,6 +695,8 @@ def api_audio(range_header: Optional[str] = Header(None, alias="Range"), recode:
 
 @app.post("/api/clip")
 def api_clip(body: Dict[str, Any]) -> Dict[str, Any]:
+    if _analysis_running():
+        raise HTTPException(status_code=503, detail="正在分析音频，请稍候")
     if _export_running():
         raise HTTPException(status_code=503, detail="正在后台导出视频，请稍后再试")
     if not (_session.track and _session.feature_cache):
@@ -666,9 +704,15 @@ def api_clip(body: Dict[str, Any]) -> Dict[str, Any]:
 
     with _state_lock:
         params = dict(_PARAMS)
-    duration = max(1.0, min(float(body.get("duration", 5.0)), 15.0))
-    fps = int(body.get("fps", 30))
-    start = float(body.get("start", 0.0))
+    try:
+        duration = max(1.0, min(float(body.get("duration", 5.0)), 15.0))
+        fps = max(1, min(int(body.get("fps", 30)), 60))
+        start = float(body.get("start", 0.0))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="片段参数无效")
+    if not (math.isfinite(duration) and math.isfinite(start)):
+        raise HTTPException(status_code=400, detail="片段参数无效")
+    start = max(0.0, start)
 
     with _render_lock:
         clip_w, clip_h = _frame_size(params["aspect"], min(int(params["frame_height"]), 540))
@@ -681,15 +725,22 @@ def api_clip(body: Dict[str, Any]) -> Dict[str, Any]:
             custom_settings=_ui_settings_from_params(params),
             visual_overrides=_visual_from_params(params),
         )
-    url = f"/api/clip/file?path={clip_path}"
+    url = "/api/clip/file?name=" + urllib.parse.quote(Path(clip_path).name)
     _set_state(clip_url=url)
     return {"url": url}
 
 
 @app.get("/api/clip/file")
-def api_clip_file(path: str):
-    p = Path(path)
-    if not (p.is_file() and p.suffix.lower() == ".mp4" and "stormy_pulse_webui" in str(p.parent)):
+def api_clip_file(name: str = "", path: str = ""):
+    # Only plain file names inside the clip directory are served; anything with
+    # a separator / ".." is rejected (``path`` is the legacy parameter: only its
+    # basename is honoured).
+    clip_dir = (Path(tempfile.gettempdir()) / "stormy_pulse_webui").resolve()
+    raw = name or Path(path).name
+    if not raw or raw != Path(raw).name or Path(raw).suffix.lower() != ".mp4":
+        raise HTTPException(status_code=404, detail="片段不存在")
+    p = (clip_dir / raw).resolve()
+    if p.parent != clip_dir or not p.is_file():
         raise HTTPException(status_code=404, detail="片段不存在")
     return FileResponse(p, media_type="video/mp4", filename=p.name)
 
@@ -697,15 +748,37 @@ def api_clip_file(path: str):
 @app.post("/api/export")
 def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
     global _export_thread, _export_cancel
+    if _analysis_running():
+        raise HTTPException(status_code=503, detail="正在分析音频，请稍候")
     if not (_session.track and _session.feature_cache):
         raise HTTPException(status_code=409, detail="尚未加载音频，请先上传")
+
+    try:
+        width = int(body.get("width", 1920))
+        height = int(body.get("height", 1080))
+        fps = int(body.get("fps", 60))
+        workers = int(body.get("cpu_render_workers", 4))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="导出参数无效")
+    video_codec = str(body.get("video_codec", "libx264"))
+    preset = str(body.get("preset", "quality"))
+    video_bitrate = str(body.get("video_bitrate", "16M"))
+    audio_bitrate = str(body.get("audio_bitrate", "320k"))
+    if not (re.fullmatch(r"[A-Za-z0-9_]{1,40}", video_codec) and re.fullmatch(r"[A-Za-z0-9_]{1,40}", preset)):
+        raise HTTPException(status_code=400, detail="编码器或预设名称无效")
+    if not (re.fullmatch(r"\d{1,6}(\.\d+)?[kKmM]?", video_bitrate) and re.fullmatch(r"\d{1,6}[kKmM]?", audio_bitrate)):
+        raise HTTPException(status_code=400, detail="码率格式无效（例如 16M、320k）")
+    if not (1 <= fps <= 120):
+        raise HTTPException(status_code=400, detail="帧率必须在 1-120 之间")
+    if not (0 < width <= 3840 and 0 < height <= 3840):
+        raise HTTPException(status_code=400, detail="分辨率超出范围（最大 3840）")
+    workers = max(1, min(workers, os.cpu_count() or 1))
+
     with _state_lock:
         if _state["export"]["phase"] in ("running",):
             raise HTTPException(status_code=409, detail="已有导出任务在进行中")
         params = dict(_PARAMS)
 
-    width = int(body.get("width", 1920))
-    height = int(body.get("height", 1080))
     if width % 2 or height % 2:
         raise HTTPException(status_code=400, detail="分辨率宽高必须为偶数")
     if width * 9 != height * 16 and width * 16 != height * 9:
@@ -725,12 +798,12 @@ def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
         output_path=str(out_file),
         width=width,
         height=height,
-        fps=int(body.get("fps", 60)),
-        video_codec=str(body.get("video_codec", "libx264")),
-        preset=str(body.get("preset", "quality")),
-        video_bitrate=str(body.get("video_bitrate", "16M")),
-        audio_bitrate=str(body.get("audio_bitrate", "320k")),
-        cpu_render_workers=int(body.get("cpu_render_workers", 4)),
+        fps=fps,
+        video_codec=video_codec,
+        preset=preset,
+        video_bitrate=video_bitrate,
+        audio_bitrate=audio_bitrate,
+        cpu_render_workers=workers,
         use_gpu_renderer=use_gpu_renderer,
         # Many-worker GPU exports: skip the O(N^2) exact per-segment replay.
         fast_segment_start=use_gpu_renderer,
@@ -739,7 +812,10 @@ def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
     cancel_event = threading.Event()
     _export_cancel = cancel_event
 
-    _set_export_state(phase="running", progress=0, message="准备导出...", file="", error="")
+    with _state_lock:
+        if _state["export"]["phase"] == "running":
+            raise HTTPException(status_code=409, detail="已有导出任务在进行中")
+        _state["export"].update(phase="running", progress=0, message="准备导出...", file="", error="")
     _export_thread = threading.Thread(
         target=_run_export,
         args=(options, ui_settings, _visual_from_params(params), cancel_event),

@@ -73,9 +73,11 @@ class MusicLibrary:
         if ext not in SUPPORTED_FORMATS:
             return None
 
-        # Check if already in library
+        # Check if already in library (compare normalized paths so the same file
+        # reached via different spellings is not added twice)
+        norm = os.path.normcase(os.path.abspath(file_path))
         for track in self.tracks:
-            if track.file_path == file_path:
+            if os.path.normcase(os.path.abspath(track.file_path)) == norm:
                 return track
 
         track = Track(file_path)
@@ -83,16 +85,27 @@ class MusicLibrary:
         return track
 
     def add_directory(self, directory: str) -> int:
-        """Scan a directory for audio files and add them."""
+        """Scan a directory for audio files and add them.
+
+        Returns the number of tracks that were newly added (already-known files
+        are not counted).
+        """
         count = 0
         dir_path = Path(directory)
-        if not dir_path.exists():
+        if not dir_path.is_dir():
             return 0
 
-        for ext in SUPPORTED_FORMATS:
-            for file_path in dir_path.rglob(f"*{ext}"):
-                if self.add_track(str(file_path)):
-                    count += 1
+        # One walk with a case-insensitive suffix test: "*.mp3" globbing missed
+        # "SONG.MP3" and walked the tree once per extension.
+        supported = {ext.lower() for ext in SUPPORTED_FORMATS}
+        files = sorted(
+            (p for p in dir_path.rglob("*") if p.is_file() and p.suffix.lower() in supported),
+            key=lambda p: str(p).lower(),
+        )
+        for file_path in files:
+            before = len(self.tracks)
+            if self.add_track(str(file_path)) and len(self.tracks) > before:
+                count += 1
 
         return count
 
