@@ -198,11 +198,9 @@ def test_clip_file_rejects_path_traversal(client):
     ],
 )
 def test_export_rejects_invalid_params(client, body):
-    from app.webui import server
-
-    if not (server._session.track and server._session.feature_cache):
-        pytest.skip("requires the analyzed track from the upload test")
-    assert client.post("/api/export", json=body).status_code in (400, 409, 503)
+    # Parameter validation happens before the "is a track loaded?" check, so this
+    # must be a 400 regardless of session state or test ordering.
+    assert client.post("/api/export", json=body).status_code == 400
 
 
 def test_state_reports_job_and_phase(client):

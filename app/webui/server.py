@@ -750,8 +750,6 @@ def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
     global _export_thread, _export_cancel
     if _analysis_running():
         raise HTTPException(status_code=503, detail="正在分析音频，请稍候")
-    if not (_session.track and _session.feature_cache):
-        raise HTTPException(status_code=409, detail="尚未加载音频，请先上传")
 
     try:
         width = int(body.get("width", 1920))
@@ -785,6 +783,10 @@ def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=400, detail="导出分辨率必须为 16:9 或 9:16")
 
     use_gpu_renderer = bool(body.get("use_gpu_renderer", False))
+
+    # Validate the request first (400s), then the session state (409).
+    if not (_session.track and _session.feature_cache):
+        raise HTTPException(status_code=409, detail="尚未加载音频，请先上传")
 
     _EXPORT_DIR.mkdir(parents=True, exist_ok=True)
     stem = Path(_session.track.file_path).stem
