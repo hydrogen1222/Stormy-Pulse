@@ -80,7 +80,7 @@ class PESField:
         # Vortex tangential force (rotational curl)
         tangent_x = -dy / r
         tangent_y = dx / r
-        vortex_mag = self.vortex_strength * 45.0 * math.exp(-((r / base_radius - 1.0) ** 2) * 1.2)
+        vortex_mag = self.vortex_strength * 45.0 * math.exp(-((r / max(1.0, base_radius) - 1.0) ** 2) * 1.2)
 
         fx = fx_grad + tangent_x * vortex_mag
         fy = fy_grad + tangent_y * vortex_mag

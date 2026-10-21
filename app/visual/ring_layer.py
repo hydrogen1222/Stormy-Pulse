@@ -43,12 +43,17 @@ class RingLayer:
     ):
         """Update ring parameters with MaterialState and GeometryControl tracking."""
         sf = dt * 60.0
+
+        def step(rate: float) -> float:
+            # Never let a single step overshoot its target (large dt after a stall).
+            return min(1.0, rate * sf)
+
         self.phase_state = phase_state
         self.material = material
         self.geometry = geometry
 
-        self.bass_pulse += (bass * 5.8 - self.bass_pulse) * (0.30 if bass * 5.8 > self.bass_pulse else 0.11) * sf
-        self.overall_pulse += (energy * 3.8 - self.overall_pulse) * (0.24 if energy * 3.8 > self.overall_pulse else 0.10) * sf
+        self.bass_pulse += (bass * 5.8 - self.bass_pulse) * step(0.30 if bass * 5.8 > self.bass_pulse else 0.11)
+        self.overall_pulse += (energy * 3.8 - self.overall_pulse) * step(0.24 if energy * 3.8 > self.overall_pulse else 0.10)
 
         rot_speed = 0.012 + bass * 0.06 + beat_strength * 0.09
         if geometry is not None:
@@ -87,16 +92,16 @@ class RingLayer:
             # Smooth radial interpolation with coherence coupling
             adapt_speed = 0.17 * (0.5 + 0.5 * coherence)
             if target_radius > self.ring_radii[ring]:
-                self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * adapt_speed * sf
+                self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * step(adapt_speed)
             else:
-                self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * 0.06 * sf
+                self.ring_radii[ring] += (target_radius - self.ring_radii[ring]) * step(0.06)
 
             # Phase progression modulated by symmetry
             phase_step = (0.03 + band_val * 0.11 + energy * 0.02) * (0.7 + 0.6 * symmetry)
             self.ring_phases[ring] += phase_step * sf
 
             target_thickness = 1.1 + band_val * 7.2 + beat_strength * 10.0 + energy * 2.0
-            self.ring_thickness[ring] += (target_thickness - self.ring_thickness[ring]) * 0.15 * sf
+            self.ring_thickness[ring] += (target_thickness - self.ring_thickness[ring]) * step(0.15)
 
             # Deterministic damage target & continuous annealing healing
             if fragmentation > 0.10 or defect_density > 0.15:
@@ -107,7 +112,7 @@ class RingLayer:
 
             # Smooth annealing interpolation (healing is slower than damage creation)
             rate = 0.20 if damage_target > self.damage_current[ring] else 0.06
-            self.damage_current[ring] += (damage_target - self.damage_current[ring]) * rate * sf
+            self.damage_current[ring] += (damage_target - self.damage_current[ring]) * step(rate)
             self.broken_segments[ring] = 1 if self.damage_current[ring] > 0.45 else 0
 
     def get_ring_data(self, index: int) -> dict:

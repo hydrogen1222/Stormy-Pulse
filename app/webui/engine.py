@@ -403,7 +403,7 @@ class WebUISession:
             for _ in range(8):
                 renderer.scene.update(frame, frame is not None, float(width), float(height), 0.016)
         else:
-            dt = max(0.001, min(t - last, 0.25))
+            dt = max(0.001, min(t - last, 0.1))  # same cap as the desktop loop
             renderer.scene.update(frame, frame is not None, float(width), float(height), dt)
         self._live_last_t = t
 

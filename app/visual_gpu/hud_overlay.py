@@ -1,6 +1,8 @@
 """Transparent overlay renderer for title, lyrics, and HUD."""
 from __future__ import annotations
 
+from typing import Optional
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage, QPainter
 
