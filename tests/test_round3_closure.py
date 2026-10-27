@@ -1,6 +1,5 @@
 import math
 import numpy as np
-import pytest
 
 from app.analysis.features import (
     TrackAnalysisMetadata,
@@ -13,10 +12,9 @@ from app.analysis.features import (
     FeatureCache,
 )
 from app.analysis.window import compute_window_features
-from app.dynamics.context import VisualContextBuilder, build_dynamics_bundle
-from app.dynamics.calibration import TrackCalibration
-from app.dynamics.trajectory import MaterialTrajectoryCompiler, MaterialStateSequence
-from app.dynamics.material import MaterialState, GeometryControl
+from app.dynamics.context import build_dynamics_bundle
+from app.dynamics.trajectory import MaterialStateSequence
+from app.dynamics.material import MaterialState
 from app.visual.scene import Scene
 from app.visual.particles import ParticleSystem
 

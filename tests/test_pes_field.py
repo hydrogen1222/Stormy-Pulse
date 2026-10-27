@@ -1,4 +1,3 @@
-import pytest
 import numpy as np
 from app.visual.pes_field import PESField
 

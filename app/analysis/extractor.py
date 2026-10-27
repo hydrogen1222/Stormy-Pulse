@@ -134,7 +134,7 @@ class FeatureExtractor:
 
                 # Section structure only depends on the raw waveform; start it
                 # alongside frame-feature extraction so it uses another core.
-                section_future = _submit(extract_sections, y, sr, self.hop_length, duration)
+                section_future = _submit(extract_sections, y, sr, duration)
 
                 f_rms = _submit(compute_rms, y, self.n_fft, self.hop_length)
                 f_peak = _submit(compute_peak_energy, y, self.n_fft, self.hop_length)

@@ -10,10 +10,9 @@ from PySide6.QtWidgets import (
     QPushButton,
     QFileDialog,
     QLabel,
-    QLineEdit,
 )
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFont, QColor
+from PySide6.QtGui import QFont
 
 
 class PlaylistPanel(QWidget):

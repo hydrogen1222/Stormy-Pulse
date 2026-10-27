@@ -1,5 +1,4 @@
 """Tests for GPU Viewport reuse_buffer and AV1_AMF export pipeline."""
-import os
 import subprocess
 import sys
 import tempfile
@@ -73,7 +72,6 @@ def test_video_exporter_amf_command_building():
     )
 
     cmd = exporter._build_rawvideo_ffmpeg_command(track, options)
-    cmd_str = " ".join(cmd)
 
     # Required D3D11 / AMF arguments
     assert "-init_hw_device" in cmd

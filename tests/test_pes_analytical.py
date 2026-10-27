@@ -1,5 +1,3 @@
-import pytest
-import math
 import numpy as np
 from app.dynamics.context import VisualContext
 from app.dynamics.field import AnalyticalPESField

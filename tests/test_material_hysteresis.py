@@ -1,7 +1,6 @@
-import pytest
 import numpy as np
 from app.dynamics.context import VisualContext
-from app.dynamics.material import MaterialStateEngine, MaterialState
+from app.dynamics.material import MaterialStateEngine
 
 
 def make_dummy_context(time: float, rms: float, onset: float, harm_ratio: float = 0.8) -> VisualContext:

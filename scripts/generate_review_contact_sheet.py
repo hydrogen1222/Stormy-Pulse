@@ -1,5 +1,4 @@
 import os
-import sys
 import numpy as np
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QImage, QPainter, QColor, QFont
@@ -7,7 +6,6 @@ from PySide6.QtGui import QImage, QPainter, QColor, QFont
 from app.analysis.extractor import FeatureExtractor
 from app.dynamics.context import build_dynamics_bundle
 from app.visual.renderer import VisualizerRenderer
-from app.visual.scene import Scene
 from app.analysis.features import (
     FrameFeatureSequence,
     EventFeatureSet,

@@ -1,6 +1,4 @@
-import pytest
-import numpy as np
-from app.visual.phase_engine import PhaseEngine, PhaseState
+from app.visual.phase_engine import PhaseEngine
 
 
 def test_phase_engine_initialization():

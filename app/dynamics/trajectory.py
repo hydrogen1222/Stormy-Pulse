@@ -6,9 +6,9 @@ from __future__ import annotations
 
 import math
 import numpy as np
-from typing import List, Optional
+from typing import List
 
-from .context import VisualContextBuilder, VisualContext
+from .context import VisualContextBuilder
 from .material import MaterialStateEngine, MaterialState
 
 

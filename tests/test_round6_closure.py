@@ -5,21 +5,13 @@ zero global random in app/visual/, deterministic ambient emission, camera shake,
 """
 import math
 import numpy as np
-import pytest
 
 from app.analysis.extractor import FeatureExtractor
 from app.analysis.features import (
     FrameFeatureSequence,
     EventFeatureSet,
-    GlobalFeatureSet,
 )
-from app.dynamics.deterministic import (
-    deterministic_float,
-    deterministic_signed,
-)
-from app.dynamics.context import build_dynamics_bundle
 from app.visual.effects import EffectState
-from app.visual.particles import ParticleSystem
 from app.visual.scene import Scene
 
 
@@ -51,9 +43,8 @@ def test_global_spectral_ratios_use_raw_shares():
     assert globals_set.structure_type == "reactor"
 
 
-def test_scene_onset_crossed_event_used():
-    """Verify Scene updates fast onset spark count via crossed onset events."""
-    scene = Scene()
+def test_event_set_reports_crossed_onset():
+    """Verify EventFeatureSet.get_events_crossed reports an onset inside the frame step."""
     beat_positions = np.array([1.0, 3.0])
     onset_positions = np.array([0.5, 1.5, 2.5])
     events = EventFeatureSet(
@@ -84,17 +75,11 @@ def test_effects_camera_shake_deterministic():
     assert e1.camera_shake_x != 0.0
 
 
-def test_scene_ambient_emission_deterministic():
-    """Verify Scene ambient emissions produce identical particle counts and positions."""
+def test_scene_particle_emission_deterministic():
+    """Verify identical emit() calls on two Scenes yield identical particles."""
     scene1 = Scene()
     scene2 = Scene()
 
-    # Emulate frame update at t=1.0 with identical inputs
-    dt = 0.016
-    scene1.time = 1.0
-    scene2.time = 1.0
-
-    # Execute deterministic update
     scene1.particles.emit(100.0, 100.0, 5, hue_base=200.0, track_seed=555)
     scene2.particles.emit(100.0, 100.0, 5, hue_base=200.0, track_seed=555)
 

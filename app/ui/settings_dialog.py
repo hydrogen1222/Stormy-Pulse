@@ -5,7 +5,7 @@ Provides structured, card-based layout controls and live preview.
 from __future__ import annotations
 
 from typing import Callable, Dict, Any, Optional
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QFontComboBox,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPushButton,
