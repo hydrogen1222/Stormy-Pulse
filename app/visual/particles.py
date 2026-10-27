@@ -6,7 +6,6 @@ from typing import List, Tuple
 from dataclasses import dataclass
 from ..dynamics.deterministic import (
     deterministic_float,
-    deterministic_uniform,
     deterministic_signed,
 )
 

@@ -1,15 +1,10 @@
 """
 Music metadata reader using mutagen.
 """
-import mutagen
 from mutagen import File as MutagenFile
-from mutagen.mp4 import MP4
-from mutagen.flac import FLAC
-from mutagen.mp3 import MP3
 from typing import Optional, Dict, Any
 from pathlib import Path
 import base64
-from io import BytesIO
 
 
 class TrackMetadata:

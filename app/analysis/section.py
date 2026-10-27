@@ -2,30 +2,21 @@
 Section-level feature analysis (macro structure).
 """
 import numpy as np
-from typing import Dict, List, Tuple, Any
+from typing import Dict, Any
 import librosa
 
 
 def extract_sections(
-    y: np.ndarray, 
-    sr: int, 
-    hop_length: int, 
+    y: np.ndarray,
+    sr: int,
     duration: float
 ) -> Dict[str, Any]:
     """
     Extract song structure boundaries using a novelty curve.
     """
-    # 1. Compute a novelty curve using librosa's rec_matrix and novelty
-    # To keep it fast, we use a coarse mel spectrogram
-    S = librosa.feature.melspectrogram(y=y, sr=sr, hop_length=hop_length, n_mels=64)
-    S_log = librosa.power_to_db(S, ref=np.max)
-    
-    # Use MFCC for structure
-    mfcc = librosa.feature.mfcc(S=S_log, n_mfcc=13)
-    
-    # Compute self-similarity matrix
-    # Using a larger hop for the structure analysis to speed it up (e.g., ~1 second per frame)
-    struct_hop = int(sr) 
+    # Compute a self-similarity matrix on coarse MFCCs.
+    # A large hop keeps this fast (~1 second per frame).
+    struct_hop = int(sr)
     mfcc_coarse = librosa.feature.mfcc(y=y, sr=sr, hop_length=struct_hop, n_mfcc=13)
     
     # Compute cross-similarity
@@ -52,7 +43,6 @@ def extract_sections(
     labels = [f"Section {i}" for i in range(len(boundaries) - 1)]
     
     # Compute energy summary per section
-    # We can use the RMS or directly S_log
     rms_coarse = librosa.feature.rms(y=y, hop_length=struct_hop)[0]
     
     section_energies = []

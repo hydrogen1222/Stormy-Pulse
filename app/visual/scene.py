@@ -1,7 +1,7 @@
 """
 Scene manager - coordinates all visual elements.
 """
-from typing import Optional, List
+from typing import Optional
 import math
 import numpy as np
 
@@ -15,8 +15,6 @@ from .phase_engine import PhaseEngine
 from .pes_field import PESField
 from ..dynamics.deterministic import (
     deterministic_float,
-    deterministic_signed,
-    deterministic_hash_uint64,
     canonical_track_seed,
 )
 from ..dynamics.field import AnalyticalPESField

@@ -1,6 +1,4 @@
-import math
 import numpy as np
-import pytest
 
 from app.config.constants import CACHE_VERSION
 from app.analysis.features import (
@@ -15,8 +13,7 @@ from app.analysis.features import (
 )
 from app.analysis.window import compute_window_features
 from app.dynamics.calibration import TrackCalibration
-from app.dynamics.context import build_dynamics_bundle, VisualContextBuilder
-from app.dynamics.material import MaterialState, GeometryControl
+from app.dynamics.context import build_dynamics_bundle
 from app.visual.scene import Scene
 from app.visual.particles import ParticleSystem
 

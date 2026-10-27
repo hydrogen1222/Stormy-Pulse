@@ -7,9 +7,12 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 import numpy as np
-from typing import Optional, Dict
+from typing import TYPE_CHECKING, Optional
 
 from .calibration import TrackCalibration
+
+if TYPE_CHECKING:  # trajectory imports this module, so import it for typing only
+    from .trajectory import MaterialStateSequence
 
 
 def _clamp(v: float, low: float = 0.0, high: float = 1.0) -> float:
@@ -62,7 +65,7 @@ class DynamicsBundle:
 
     calibration: TrackCalibration
     context_builder: VisualContextBuilder
-    material_trajectory: "MaterialStateSequence"
+    material_trajectory: MaterialStateSequence
     track_seed: int
 
 

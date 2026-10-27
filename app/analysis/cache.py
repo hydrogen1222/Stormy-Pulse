@@ -1,7 +1,6 @@
 """
 Feature cache management - saves and loads features from disk.
 """
-import numpy as np
 import gzip
 import pickle
 from pathlib import Path
@@ -11,7 +10,7 @@ import logging
 import os
 import tempfile
 
-from .features import FeatureCache, GlobalFeatureSet
+from .features import FeatureCache
 from .extractor import FeatureExtractor
 from ..config.constants import CACHE_VERSION, CACHE_EXT
 from ..config.settings import settings

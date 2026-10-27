@@ -1,7 +1,6 @@
 import pytest
 import numpy as np
 from PySide6.QtWidgets import QApplication
-from PySide6.QtGui import QImage
 
 from app.visual.scene import Scene
 from app.visual.themes import get_theme
@@ -75,3 +74,7 @@ def test_gpu_and_cpu_render_bounding_flash(qapp):
     # All four corners of the background gradient should be symmetric horizontally
     diff_top = np.abs(top_left_pixel - top_right_pixel)
     assert np.max(diff_top) < 15, f"Top left and top right differ significantly: {top_left_pixel} vs {top_right_pixel}"
+    diff_bottom = np.abs(bottom_left_pixel - bottom_right_pixel)
+    assert np.max(diff_bottom) < 15, (
+        f"Bottom left and bottom right differ significantly: {bottom_left_pixel} vs {bottom_right_pixel}"
+    )

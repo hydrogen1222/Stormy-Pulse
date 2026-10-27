@@ -1,7 +1,7 @@
 """
 Player controls widget.
 """
-from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QSlider, QLabel, QPushButton, QStyle
+from PySide6.QtWidgets import QWidget, QHBoxLayout, QVBoxLayout, QSlider, QLabel, QPushButton
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QFont
 

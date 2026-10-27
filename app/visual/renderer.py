@@ -27,10 +27,7 @@ from PySide6.QtWidgets import QWidget
 from ..config.settings import settings
 from ..core.lyrics import TrackLyrics
 from ..dynamics.deterministic import (
-    deterministic_hash_uint64,
     deterministic_float,
-    deterministic_uniform,
-    deterministic_signed,
 )
 from .scene import Scene
 from .themes import Theme
@@ -525,17 +522,10 @@ class VisualizerRenderer(QWidget):
         if theme and hasattr(theme, "draw_plan") and not theme.draw_plan.show_optical_core:
             if theme.draw_plan.structure_type == "vortex":
                 self._draw_vortex_eye_core(painter, cx, cy, width, height, core)
-                return
-            elif theme.draw_plan.structure_type == "organic":
-                return
-            elif theme.draw_plan.structure_type == "reactor":
-                return
             return
 
         r, g, b, _ = theme.get_color(role="foreground_primary", alpha=1.0)
-        base_color = QColor(r, g, b)
         r_acc, g_acc, b_acc, _ = theme.get_color(role="accent", alpha=1.0)
-        accent_color = QColor(r_acc, g_acc, b_acc)
 
         glow_radius = _clamp(core["glow_radius"] * 0.58, base * 0.07, safe_radius * 0.58)
         glow_grad = QRadialGradient(cx, cy, glow_radius)
@@ -2052,7 +2042,6 @@ class VisualizerRenderer(QWidget):
         title_r, title_g, title_b, _ = dna.get_color(role="title_text", alpha=1.0)
         hud_r, hud_g, hud_b, _ = dna.get_color(role="hud_text", alpha=1.0)
         acc_r, acc_g, acc_b, _ = dna.get_color(role="accent", alpha=1.0)
-        is_vertical = self._layout_state.get("canvas_ratio_key") == "9:16"
         panel_rect = rect.adjusted(0, 0, 0, 0)
         if panel_rect.height() <= 10:
             return
@@ -2071,7 +2060,6 @@ class VisualizerRenderer(QWidget):
             -panel_rect.height() * 0.12,
         )
         active_rect = content_rect
-        active_corner = max(active_rect.height() * 0.12, 6.0)
 
         # Vertical indicator bar
         bar_rect = QRectF(

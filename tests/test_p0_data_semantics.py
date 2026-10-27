@@ -1,7 +1,6 @@
-import pytest
 import numpy as np
 from app.analysis.beat import detect_beats, compute_beat_regularity
-from app.analysis.features import FeatureFrame, GlobalFeatureSet
+from app.analysis.features import FeatureFrame
 from app.dynamics.calibration import TrackCalibration
 from app.visual.scene import Scene
 from app.visual.phase_engine import PhaseEngine

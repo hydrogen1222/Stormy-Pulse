@@ -537,7 +537,7 @@ class WebUISession:
                 stderr_reader.join(timeout=5)
                 stderr_text = b"".join(stderr_chunks).decode("utf-8", errors="ignore")
                 clip_path.unlink(missing_ok=True)
-                raise RuntimeError(f"ffmpeg 编码预览片段失败: {stderr_text.strip() or '管道已关闭'}")
+                raise RuntimeError(f"ffmpeg 编码预览片段失败: {stderr_text.strip() or '管道已关闭'}") from None
             except Exception:
                 try:
                     if proc.stdin and not proc.stdin.closed:

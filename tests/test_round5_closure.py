@@ -7,20 +7,14 @@ import sys
 import math
 import subprocess
 import numpy as np
-import pytest
 
 from app.config.constants import CACHE_VERSION
 from app.analysis.spectrum import compute_band_energies_6
 from app.analysis.features import (
-    FrameFeatureSequence,
     EventFeatureSet,
-    GlobalFeatureSet,
 )
 from app.dynamics.deterministic import (
-    deterministic_hash_uint64,
     deterministic_float,
-    deterministic_uniform,
-    deterministic_signed,
 )
 from app.dynamics.material import GeometryControl, MaterialState
 from app.visual.ring_layer import RingLayer

@@ -1,6 +1,5 @@
-import pytest
 import numpy as np
-from app.analysis.features import FeatureFrame, GlobalFeatureSet, FrameFeatureSequence, EventFeatureSet, FeatureCache, TrackAnalysisMetadata
+from app.analysis.features import GlobalFeatureSet, FrameFeatureSequence, EventFeatureSet, FeatureCache, TrackAnalysisMetadata
 from app.dynamics.context import VisualContextBuilder, VisualContext
 
 

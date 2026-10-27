@@ -3,8 +3,6 @@ Audio player using PySide6 multimedia.
 """
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtCore import QUrl, Signal, QObject
-from PySide6.QtWidgets import QApplication
-import sys
 
 from .playback_state import PlaybackState
 from .music_library import Track
