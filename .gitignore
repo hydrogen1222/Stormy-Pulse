@@ -55,3 +55,20 @@ scratch/
 *.mp3
 *.wav
 *.m4a
+
+# Test / lint caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Logs and temp output
+*.log
+*.tmp
+tmp/
+output/
+exports/
+*.mp4
+*.mkv
+*.mov

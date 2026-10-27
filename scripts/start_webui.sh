@@ -1,5 +1,5 @@
 #!/bin/bash
-cd "$(dirname "$0")"
+cd "$(dirname "$0")/.."
 # This is a headless server: use the local headless Xorg :0 when it is up.
 # Do not trust an inherited DISPLAY such as localhost:11.0 (SSH X forwarding),
 # which may not have a local X socket and would make Qt fall back to offscreen.
