@@ -38,6 +38,7 @@ from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from app.logging_setup import setup_logging
 from app.webui.engine import WebUISession
 from app.webui.hardware import (
     detect_available_encoders,
@@ -709,7 +710,7 @@ def api_clip(body: Dict[str, Any]) -> Dict[str, Any]:
         fps = max(1, min(int(body.get("fps", 30)), 60))
         start = float(body.get("start", 0.0))
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="片段参数无效")
+        raise HTTPException(status_code=400, detail="片段参数无效") from None
     if not (math.isfinite(duration) and math.isfinite(start)):
         raise HTTPException(status_code=400, detail="片段参数无效")
     start = max(0.0, start)
@@ -757,7 +758,7 @@ def api_export(body: Dict[str, Any]) -> Dict[str, Any]:
         fps = int(body.get("fps", 60))
         workers = int(body.get("cpu_render_workers", 4))
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="导出参数无效")
+        raise HTTPException(status_code=400, detail="导出参数无效") from None
     video_codec = str(body.get("video_codec", "libx264"))
     preset = str(body.get("preset", "quality"))
     video_bitrate = str(body.get("video_bitrate", "16M"))
@@ -996,6 +997,7 @@ def main():
     parser.add_argument("--port", type=int, default=7860, help="Port to listen on (default: 7860)")
     parser.add_argument("--check-gpu", action="store_true", help="Probe OpenGL frame-render availability, print the reason, and exit")
     args = parser.parse_args()
+    setup_logging()
 
     if args.check_gpu:
         run_gpu_check()

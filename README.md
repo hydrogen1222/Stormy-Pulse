@@ -14,12 +14,12 @@
 
 ### 1. 克隆仓库
 ```bash
-git clone <repository_url>
+git clone https://github.com/hydrogen1222/Stormy-Pulse.git
 cd Stormy-Pulse
 ```
 
 ### 2. 同步并安装依赖
-在项目根目录下，执行 `uv sync` 会自动创建虚拟环境，并将当前项目以开发模式打包安装：
+在项目根目录下，执行 `uv sync` 会按 `.python-version`（3.13）自动准备 Python、创建虚拟环境，并将当前项目以开发模式打包安装：
 ```bash
 uv sync
 ```
@@ -29,7 +29,14 @@ uv sync
 ```bash
 uv run music-visualizer
 ```
-*(注：你也可以通过运行 `uv run main.py` 或 `uv run run.py` 来启动项目)*
+*(等价写法：`uv run python -m app`)*
+
+### 开发
+`uv sync` 默认会一并安装 dev 依赖组（pytest、ruff 等）：
+```bash
+uv run pytest          # 运行测试
+uv run ruff check .    # 静态检查
+```
 
 ---
 
@@ -39,8 +46,8 @@ uv run music-visualizer
 
 ```bash
 uv run music-visualizer-web          # 默认 0.0.0.0:7860
+uv run music-visualizer --web        # 等价入口
 uv run python -m app.webui --port 7860
-uv run main.py --web                 # 等价入口
 ```
 
 启动后访问 `http://localhost:7860`（局域网内其他设备用服务器 IP 访问）。

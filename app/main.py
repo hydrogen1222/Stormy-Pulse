@@ -1,66 +1,50 @@
 """
-Main entry point for the music visualizer application.
-"""
-import sys
-import logging
-from pathlib import Path
+Entry point for the music visualizer.
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+    uv run music-visualizer          # desktop player
+    uv run music-visualizer --web    # WebUI (same as `music-visualizer-web`)
+"""
+import logging
+import sys
+
+from app.logging_setup import setup_logging
+
 logger = logging.getLogger(__name__)
 
 
-def main():
-    """Main entry point."""
-    # Check for WebUI flag
+def main() -> None:
+    """Start the desktop player, or the WebUI when ``--web`` / ``--webui`` is given."""
     if "--web" in sys.argv or "--webui" in sys.argv:
-        # Remove --web flag from sys.argv so argparse in server.py doesn't complain
+        # Drop the flag so the WebUI's own argparse does not reject it.
         sys.argv = [arg for arg in sys.argv if arg not in ("--web", "--webui")]
         from app.webui.server import main as webui_main
+
         webui_main()
         return
 
+    setup_logging()
     logger.info("Starting Music Visualizer Player")
 
-    # Add app directory to path for imports
-    app_dir = Path(__file__).parent.parent
-    sys.path.insert(0, str(app_dir))
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication
 
-    try:
-        from PySide6.QtWidgets import QApplication
-        from PySide6.QtCore import Qt, QDir
+    # High-DPI rounding policy must be set before QApplication is created.
+    QApplication.setHighDpiScaleFactorRoundingPolicy(
+        Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
+    )
 
-        # Enable high DPI scaling - MUST be called before QApplication
-        QApplication.setHighDpiScaleFactorRoundingPolicy(
-            Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
-        )
+    qt_app = QApplication(sys.argv)
+    qt_app.setApplicationName("音乐可视化播放器")
+    qt_app.setOrganizationName("MusicVisualizer")
+    qt_app.setStyle("Fusion")
 
-        app = QApplication(sys.argv)
-        app.setApplicationName("音乐可视化播放器")
-        app.setOrganizationName("MusicVisualizer")
+    from app.ui import MainWindow
 
-        # Set style
-        app.setStyle("Fusion")
+    window = MainWindow()
+    window.show()
 
-        from app.ui import MainWindow
-
-        window = MainWindow()
-        window.show()
-
-        logger.info("Application started successfully")
-        sys.exit(app.exec())
-
-    except ImportError as e:
-        logger.error(f"Import error: {e}")
-        print("Error: Required packages not found.")
-        print("Please install requirements: pip install -r requirements.txt")
-        sys.exit(1)
-    except Exception as e:
-        logger.error(f"Application error: {e}")
-        raise
+    logger.info("Application started successfully")
+    sys.exit(qt_app.exec())
 
 
 if __name__ == "__main__":
